@@ -25,6 +25,8 @@ class GodotProcessManager:
         self._start_time: float = 0.0
         self._reader_task: asyncio.Task | None = None
         self._exit_code: int | None = None
+        self._harness_ready_event: asyncio.Event = asyncio.Event()
+        self._harness_port: int | None = None
 
     async def launch(self, mode: str, scene: str, extra_args: list[str]) -> int:
         """Start Godot process. Stops existing process first if running.
@@ -39,6 +41,8 @@ class GodotProcessManager:
         self._stderr_lines = []
         self._parser = ErrorParser()
         self._exit_code = None
+        self._harness_ready_event = asyncio.Event()
+        self._harness_port = None
 
         cmd = self._build_cmd(mode, scene, extra_args)
         self._process = await asyncio.create_subprocess_exec(
@@ -108,6 +112,28 @@ class GodotProcessManager:
 
         self._exit_code = self._process.returncode or 0
         return self._exit_code
+
+    async def wait_for_harness(self, timeout: float = 15.0) -> int:
+        """Wait for the TestHarness to signal readiness via stdout.
+
+        Returns the port number the harness is listening on.
+
+        Raises:
+            TimeoutError: If harness doesn't become ready in time.
+            RuntimeError: If process exits before harness is ready.
+        """
+        try:
+            await asyncio.wait_for(self._harness_ready_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            if not self.is_running:
+                raise RuntimeError(
+                    "Godot process exited before TestHarness became ready."
+                )
+            raise TimeoutError(
+                f"TestHarness did not signal ready within {timeout}s. "
+                "Check that the harness autoload is registered correctly."
+            )
+        return self._harness_port or 9877
 
     @property
     def is_running(self) -> bool:
@@ -180,6 +206,13 @@ class GodotProcessManager:
                     break
                 line = raw.decode("utf-8", errors="replace").rstrip("\n\r")
                 buffer.append(line)
+                # Detect harness ready signal
+                if line.startswith("TEST_HARNESS_READY:"):
+                    try:
+                        self._harness_port = int(line.split(":")[1])
+                    except (IndexError, ValueError):
+                        self._harness_port = 9877
+                    self._harness_ready_event.set()
                 elapsed = time.time() - self._start_time
                 self._parser.feed_line(line, elapsed)
                 # Cap buffer at 50,000 lines

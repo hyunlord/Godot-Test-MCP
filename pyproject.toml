@@ -1,6 +1,6 @@
 [project]
 name = "godot-test-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for automated Godot 4 game testing — launch, run, capture errors"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.0.0",
+    "websockets>=12.0",
 ]
 
 [project.urls]
@@ -41,6 +42,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/harness" = "src/harness"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
