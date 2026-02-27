@@ -26,8 +26,17 @@ class GodotProcessManager:
         self._reader_task: asyncio.Task | None = None
         self._exit_code: int | None = None
 
-    async def launch(self, mode: str, scene: str, extra_args: list[str]) -> int:
+    async def launch(
+        self, mode: str, scene: str, extra_args: list[str],
+        test_harness: bool = False,
+    ) -> int:
         """Start Godot process. Stops existing process first if running.
+
+        Args:
+            mode: Run mode (headless, windowed, editor).
+            scene: Scene path to run (empty = main scene).
+            extra_args: Additional Godot CLI arguments.
+            test_harness: If True, append --test-harness to enable WS bridge.
 
         Returns the PID of the new process.
         """
@@ -41,6 +50,8 @@ class GodotProcessManager:
         self._exit_code = None
 
         cmd = self._build_cmd(mode, scene, extra_args)
+        if test_harness:
+            cmd.append("--test-harness")
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
