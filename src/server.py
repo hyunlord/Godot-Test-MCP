@@ -339,5 +339,10 @@ async def main() -> None:
         )
 
 
-if __name__ == "__main__":
+def run() -> None:
+    """Synchronous entrypoint for CLI and uvx."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()

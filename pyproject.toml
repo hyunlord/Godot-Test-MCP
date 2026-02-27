@@ -1,12 +1,37 @@
 [project]
 name = "godot-test-mcp"
 version = "0.1.0"
-description = "MCP server for automated Godot game testing — launch, run, capture errors"
+description = "MCP server for automated Godot 4 game testing — launch, run, capture errors"
 requires-python = ">=3.10"
 license = {text = "MIT"}
+readme = "README.md"
+authors = [
+    {name = "hyunlord"}
+]
+keywords = ["mcp", "godot", "testing", "automation", "gamedev"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Games/Entertainment",
+]
 dependencies = [
     "mcp>=1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/hyunlord/Godot-Test-MCP"
+Repository = "https://github.com/hyunlord/Godot-Test-MCP"
+Issues = "https://github.com/hyunlord/Godot-Test-MCP/issues"
+
+[project.scripts]
+godot-test-mcp = "src.server:run"
 
 [project.optional-dependencies]
 dev = [
@@ -16,6 +41,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["hatchling"]
