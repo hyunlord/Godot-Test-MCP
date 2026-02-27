@@ -12,11 +12,9 @@ from mcp.types import TextContent, Tool
 
 from .config import Config
 from .godot_process import GodotProcessManager
-from .ws_client import GodotWebSocketClient
 
 server = Server("godot-test-mcp")
 manager: GodotProcessManager
-ws_client: GodotWebSocketClient = GodotWebSocketClient()
 
 
 def _text(data: dict) -> list[TextContent]:
@@ -27,15 +25,13 @@ def _text(data: dict) -> list[TextContent]:
 # ── Tool definitions ─────────────────────────────────────────────────────
 
 TOOLS = [
-    # ── Phase 1 tools ────────────────────────────────────────────────
     Tool(
         name="godot_launch",
         description=(
             "Launch Godot game process. "
             "mode: 'headless' (no GUI), 'windowed' (GUI), or 'editor'. "
             "scene: scene path to run (empty = main scene). "
-            "extra_args: additional Godot CLI arguments. "
-            "test_harness: enable WebSocket test bridge (Phase 2)."
+            "extra_args: additional Godot CLI arguments."
         ),
         inputSchema={
             "type": "object",
@@ -56,11 +52,6 @@ TOOLS = [
                     "items": {"type": "string"},
                     "default": [],
                     "description": "Additional Godot CLI arguments",
-                },
-                "test_harness": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Enable TestHarness WebSocket bridge for Phase 2 tools",
                 },
             },
         },
@@ -143,11 +134,6 @@ TOOLS = [
                     "default": "",
                     "description": "Scene to run (empty = main scene)",
                 },
-                "test_harness": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Enable TestHarness for actual simulation (not idle map editor)",
-                },
             },
         },
     ),
@@ -164,118 +150,6 @@ TOOLS = [
         description="Get current Godot process status (running/stopped/crashed).",
         inputSchema={"type": "object", "properties": {}},
     ),
-    # ── Phase 2 tools ────────────────────────────────────────────────
-    Tool(
-        name="godot_advance_ticks",
-        description=(
-            "Advance the simulation by N ticks instantly. "
-            "Requires Godot running with test_harness=true."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "count": {
-                    "type": "integer",
-                    "default": 100,
-                    "description": "Number of ticks to advance (1-100000)",
-                },
-            },
-        },
-    ),
-    Tool(
-        name="godot_get_tick",
-        description="Get current simulation tick, game time, pause state, and speed.",
-        inputSchema={"type": "object", "properties": {}},
-    ),
-    Tool(
-        name="godot_get_entity",
-        description="Get full entity state by ID (all fields from entity_data.to_dict()).",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "integer",
-                    "description": "Entity ID",
-                },
-            },
-            "required": ["id"],
-        },
-    ),
-    Tool(
-        name="godot_get_entity_field",
-        description="Get a single field from an entity's state. Lightweight alternative to get_entity.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "integer",
-                    "description": "Entity ID",
-                },
-                "field": {
-                    "type": "string",
-                    "description": "Field name (e.g. 'hunger', 'energy', 'position_x')",
-                },
-            },
-            "required": ["id", "field"],
-        },
-    ),
-    Tool(
-        name="godot_get_entities",
-        description="Get a list of entities with their full state.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "filter": {
-                    "type": "string",
-                    "enum": ["alive", "all"],
-                    "default": "alive",
-                    "description": "Filter: 'alive' (default) or 'all'",
-                },
-                "limit": {
-                    "type": "integer",
-                    "default": 50,
-                    "description": "Max entities to return (1-200)",
-                },
-            },
-        },
-    ),
-    Tool(
-        name="godot_get_alive_count",
-        description="Get the number of alive entities. Lightweight population check.",
-        inputSchema={"type": "object", "properties": {}},
-    ),
-    Tool(
-        name="godot_get_settlement",
-        description="Get settlement data by ID.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "integer",
-                    "description": "Settlement ID",
-                },
-            },
-            "required": ["id"],
-        },
-    ),
-    Tool(
-        name="godot_get_world_stats",
-        description=(
-            "Get aggregated world statistics: population, avg hunger/energy/stress, "
-            "settlement count, min/max values."
-        ),
-        inputSchema={"type": "object", "properties": {}},
-    ),
-    Tool(
-        name="godot_pause",
-        description="Pause the simulation.",
-        inputSchema={"type": "object", "properties": {}},
-    ),
-    Tool(
-        name="godot_resume",
-        description="Resume the simulation.",
-        inputSchema={"type": "object", "properties": {}},
-    ),
 ]
 
 
@@ -286,7 +160,6 @@ async def handle_list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
-    # Phase 1 tools
     if name == "godot_launch":
         return await _godot_launch(arguments)
     elif name == "godot_stop":
@@ -301,48 +174,22 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         return await _godot_headless_import(arguments)
     elif name == "godot_get_status":
         return await _godot_get_status(arguments)
-    # Phase 2 tools
-    elif name == "godot_advance_ticks":
-        return await _godot_advance_ticks(arguments)
-    elif name == "godot_get_tick":
-        return await _godot_get_tick(arguments)
-    elif name == "godot_get_entity":
-        return await _godot_get_entity(arguments)
-    elif name == "godot_get_entity_field":
-        return await _godot_get_entity_field(arguments)
-    elif name == "godot_get_entities":
-        return await _godot_get_entities(arguments)
-    elif name == "godot_get_alive_count":
-        return await _godot_get_alive_count(arguments)
-    elif name == "godot_get_settlement":
-        return await _godot_get_settlement(arguments)
-    elif name == "godot_get_world_stats":
-        return await _godot_get_world_stats(arguments)
-    elif name == "godot_pause":
-        return await _godot_pause(arguments)
-    elif name == "godot_resume":
-        return await _godot_resume(arguments)
     else:
         return _text({"error": f"Unknown tool: {name}"})
 
 
-# ── Phase 1 tool implementations ─────────────────────────────────────────
+# ── Tool implementations ─────────────────────────────────────────────────
 
 
 async def _godot_launch(args: dict) -> list[TextContent]:
     mode = args.get("mode", "headless")
     scene = args.get("scene", "")
     extra_args = args.get("extra_args", [])
-    test_harness = args.get("test_harness", False)
-    pid = await manager.launch(mode, scene, extra_args, test_harness=test_harness)
-    return _text({"status": "launched", "pid": pid, "mode": mode, "test_harness": test_harness})
+    pid = await manager.launch(mode, scene, extra_args)
+    return _text({"status": "launched", "pid": pid, "mode": mode})
 
 
 async def _godot_stop(args: dict) -> list[TextContent]:
-    # Disconnect WebSocket first
-    if ws_client.is_connected:
-        await ws_client.disconnect()
-
     force = args.get("force", False)
     if not manager.is_running:
         return _text({"status": "not_running"})
@@ -383,16 +230,13 @@ async def _godot_run_and_check(args: dict) -> list[TextContent]:
     mode = args.get("mode", "headless")
     fail_on_warnings = args.get("fail_on_warnings", False)
     scene = args.get("scene", "")
-    test_harness = args.get("test_harness", False)
 
     # 1. Stop if already running
     if manager.is_running:
-        if ws_client.is_connected:
-            await ws_client.disconnect()
         await manager.stop()
 
     # 2. Launch
-    await manager.launch(mode, scene, [], test_harness=test_harness)
+    await manager.launch(mode, scene, [])
 
     # 3. Wait N seconds, detect early crash
     start = time.time()
@@ -406,8 +250,6 @@ async def _godot_run_and_check(args: dict) -> list[TextContent]:
     crashed = False
     exit_code = 0
     if manager.is_running:
-        if ws_client.is_connected:
-            await ws_client.disconnect()
         exit_code = await manager.stop()
     else:
         exit_code = manager.exit_code or 0
@@ -479,112 +321,6 @@ async def _godot_get_status(args: dict) -> list[TextContent]:
             "exit_code": manager.exit_code,
             "error_count": len(manager.get_errors()),
         })
-
-
-# ── Phase 2 tool implementations ─────────────────────────────────────────
-
-
-async def _ensure_ws_connected() -> None:
-    """Connect to Godot WS if not already connected."""
-    if not ws_client.is_connected:
-        await ws_client.connect()
-
-
-async def _godot_advance_ticks(args: dict) -> list[TextContent]:
-    count = args.get("count", 100)
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("advance_ticks", {"count": count})
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_get_tick(args: dict) -> list[TextContent]:
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("get_tick")
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_get_entity(args: dict) -> list[TextContent]:
-    entity_id = args.get("id", -1)
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("get_entity", {"id": entity_id})
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_get_entity_field(args: dict) -> list[TextContent]:
-    entity_id = args.get("id", -1)
-    field = args.get("field", "")
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("get_entity_field", {"id": entity_id, "field": field})
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_get_entities(args: dict) -> list[TextContent]:
-    filter_str = args.get("filter", "alive")
-    limit = args.get("limit", 50)
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("get_entities", {"filter": filter_str, "limit": limit})
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_get_alive_count(args: dict) -> list[TextContent]:
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("get_alive_count")
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_get_settlement(args: dict) -> list[TextContent]:
-    settlement_id = args.get("id", -1)
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("get_settlement", {"id": settlement_id})
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_get_world_stats(args: dict) -> list[TextContent]:
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("get_world_stats")
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_pause(args: dict) -> list[TextContent]:
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("pause")
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
-
-
-async def _godot_resume(args: dict) -> list[TextContent]:
-    try:
-        await _ensure_ws_connected()
-        result = await ws_client.send_command("resume")
-        return _text({"status": "ok", **result})
-    except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
 
 
 # ── Entrypoint ──────────────────────────────────────────────────────────
