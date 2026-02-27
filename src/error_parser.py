@@ -44,6 +44,22 @@ _AT_LINE_NO_SOURCE_RE = re.compile(
     r"\s+at:\s*(.*)"
 )
 
+# Messages that Godot emits during normal headless shutdown (not real errors).
+_IGNORE_PATTERNS: tuple[str, ...] = (
+    "resources still in use at exit",
+    "orphan StringName",
+    "ObjectDB instances leaked",
+    "Leaked instance",
+)
+
+
+def _is_ignorable(line: str) -> bool:
+    """Return True if the line matches a known harmless Godot shutdown message."""
+    for pattern in _IGNORE_PATTERNS:
+        if pattern in line:
+            return True
+    return False
+
 
 class ErrorParser:
     """Incremental parser for Godot stdout/stderr error output.
@@ -88,7 +104,11 @@ class ErrorParser:
                 result = self._complete_pending(source="", line_no=-1)
                 # Fall through to process current line
 
-        # 2. Match current line against patterns
+        # 2. Skip lines matching known harmless Godot shutdown messages
+        if _is_ignorable(line):
+            return result
+
+        # 3. Match current line against patterns
         # Pattern 2: Parse Error (single line)
         m = _PARSE_ERROR_RE.match(line)
         if m:
@@ -118,21 +138,21 @@ class ErrorParser:
             return parsed or result
 
         # Pattern 1: SCRIPT ERROR (multi-line start)
-        if line.startswith("SCRIPT ERROR:"):
+        if line.startswith("SCRIPT ERROR:") and not _is_ignorable(line):
             self._pending_line = line
             self._pending_elapsed = elapsed
             self._pending_category = "SCRIPT_ERROR"
             return result
 
         # Pattern 5/6: ERROR (multi-line start possible)
-        if line.startswith("ERROR:"):
+        if line.startswith("ERROR:") and not _is_ignorable(line):
             self._pending_line = line
             self._pending_elapsed = elapsed
             self._pending_category = "GENERAL_ERROR"
             return result
 
         # Pattern 7/8: WARNING (multi-line start possible)
-        if line.startswith("WARNING:"):
+        if line.startswith("WARNING:") and not _is_ignorable(line):
             self._pending_line = line
             self._pending_elapsed = elapsed
             self._pending_category = "WARNING"

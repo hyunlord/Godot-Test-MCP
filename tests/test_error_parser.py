@@ -153,6 +153,53 @@ class TestNormalOutput:
         assert len(parser.get_warnings()) == 0
 
 
+class TestIgnoreShutdownMessages:
+    """Godot headless shutdown noise should be silently ignored."""
+
+    def test_ignore_resources_still_in_use(self):
+        parser = ErrorParser()
+        result = parser.feed_line(
+            "ERROR: resources still in use at exit (run with --verbose for details)",
+            elapsed=10.0,
+        )
+        assert result is None
+        assert len(parser.get_errors()) == 0
+
+    def test_ignore_orphan_stringname(self):
+        parser = ErrorParser()
+        result = parser.feed_line(
+            "ERROR: orphan StringName: @GlobalScope",
+            elapsed=10.0,
+        )
+        assert result is None
+        assert len(parser.get_errors()) == 0
+
+    def test_ignore_objectdb_leaked(self):
+        parser = ErrorParser()
+        result = parser.feed_line(
+            "WARNING: ObjectDB instances leaked at exit (run with --verbose for details)",
+            elapsed=10.0,
+        )
+        assert result is None
+        assert len(parser.get_warnings()) == 0
+
+    def test_ignore_leaked_instance(self):
+        parser = ErrorParser()
+        result = parser.feed_line(
+            "Leaked instance: RenderingDevice",
+            elapsed=10.0,
+        )
+        assert result is None
+        assert len(parser.get_errors()) == 0
+
+    def test_real_error_still_caught(self):
+        """Ensure the filter doesn't suppress real errors."""
+        parser = ErrorParser()
+        parser.feed_line("ERROR: Something actually wrong.", elapsed=1.0)
+        parser.feed_line("Some normal output", elapsed=1.1)
+        assert len(parser.get_errors()) == 1
+
+
 class TestFlush:
     """flush() should complete any pending multi-line error."""
 
