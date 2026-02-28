@@ -8,6 +8,14 @@ var _peers: Array = []
 var _port: int = 9877
 var _ready_for_commands: bool = false
 
+const _BLOCKED_PATTERNS: PackedStringArray = [
+	"OS.", "FileAccess.", "DirAccess.", "ClassDB.",
+	"Engine.get_singleton", "JavaScriptBridge.",
+	"WorkerThreadPool.", "Thread.new",
+	"ResourceSaver.", "ResourceLoader.load",
+	"ProjectSettings.save",
+]
+
 func _ready() -> void:
 	# Read port from command line: --test-harness-port=9877
 	for arg in OS.get_cmdline_user_args():
@@ -82,6 +90,12 @@ func _dispatch(method: String, params: Dictionary) -> Dictionary:
 			return _cmd_get_nodes_in_group(params)
 		"eval":
 			return _cmd_eval(params)
+		"inspect":
+			return _cmd_inspect(params)
+		"run_script":
+			return _cmd_run_script(params)
+		"batch":
+			return _cmd_batch(params)
 		"pause":
 			get_tree().paused = true
 			return {"result": {"paused": true}}
@@ -187,6 +201,172 @@ func _cmd_eval(params: Dictionary) -> Dictionary:
 	if expr.has_execute_failed():
 		return {"error": {"code": -1, "message": "Execution error: %s" % expr.get_error_text()}}
 	return {"result": {"value": _safe_value(result)}}
+
+
+func _cmd_inspect(params: Dictionary) -> Dictionary:
+	var expr_str: String = str(params.get("expression", ""))
+	var depth: int = int(params.get("depth", 0))
+	if depth > 3:
+		depth = 3
+
+	var expr := Expression.new()
+	var err: int = expr.parse(expr_str)
+	if err != OK:
+		return {"error": {"code": -1, "message": "Parse error: %s" % expr.get_error_text()}}
+	var obj = expr.execute([], get_tree().root)
+	if expr.has_execute_failed():
+		return {"error": {"code": -1, "message": "Execution error: %s" % expr.get_error_text()}}
+	if obj == null:
+		return {"error": {"code": -1, "message": "Expression returned null"}}
+
+	var result: Dictionary = _inspect_object(obj, depth)
+	return {"result": result}
+
+
+func _inspect_object(obj: Variant, depth: int) -> Dictionary:
+	var result: Dictionary = {}
+
+	result["type"] = type_string(typeof(obj))
+
+	if not (obj is Object):
+		result["value"] = _safe_value(obj)
+		return result
+
+	result["class"] = obj.get_class()
+
+	var script = obj.get_script()
+	if script:
+		result["script"] = script.resource_path
+
+	# Properties — SCRIPT VARIABLES ONLY (filter engine noise)
+	var properties: Dictionary = {}
+	for prop in obj.get_property_list():
+		if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
+			var pname: String = prop["name"]
+			var val = obj.get(pname)
+			var prop_info: Dictionary = {
+				"type": type_string(prop["type"]),
+			}
+			if val is Dictionary:
+				prop_info["value"] = "<Dictionary size:%d>" % val.size() if val.size() > 10 else _safe_dict(val)
+				prop_info["keys"] = _safe_array(val.keys()) if val.size() <= 50 else ["<%d keys>" % val.size()]
+			elif val is Array:
+				prop_info["value"] = "<Array size:%d>" % val.size() if val.size() > 10 else _safe_array(val)
+			else:
+				prop_info["value"] = _safe_value(val)
+			properties[pname] = prop_info
+	result["properties"] = properties
+
+	# Methods — SCRIPT METHODS ONLY
+	var methods: Array = []
+	if script:
+		for method in script.get_script_method_list():
+			var mname: String = method["name"]
+			if mname.begins_with("_") and mname != "_ready" and mname != "_process":
+				continue
+			var args: Array = []
+			for arg in method["args"]:
+				args.append({"name": arg["name"], "type": type_string(arg["type"])})
+			methods.append({
+				"name": mname,
+				"args": args,
+				"return_type": type_string(method["return"]["type"]),
+			})
+	result["methods"] = methods
+
+	# Signals — SCRIPT SIGNALS ONLY
+	var signals: Array = []
+	if script:
+		for sig in script.get_script_signal_list():
+			var sig_args: Array = []
+			for arg in sig["args"]:
+				sig_args.append({"name": arg["name"], "type": type_string(arg["type"])})
+			signals.append({"name": sig["name"], "args": sig_args})
+	result["signals"] = signals
+
+	# Groups and children (only for Node)
+	if obj is Node:
+		result["groups"] = []
+		for g in obj.get_groups():
+			var gname: String = g
+			if not gname.begins_with("_"):
+				result["groups"].append(gname)
+
+		if depth > 0:
+			var children: Array = []
+			for child in obj.get_children():
+				children.append(_inspect_object(child, depth - 1))
+			result["children"] = children
+		else:
+			var child_names: Array = []
+			for child in obj.get_children():
+				child_names.append({"name": child.name, "class": child.get_class()})
+			result["children"] = child_names
+
+	return result
+
+
+func _cmd_run_script(params: Dictionary) -> Dictionary:
+	var code: String = str(params.get("code", ""))
+
+	# Security check — block dangerous patterns
+	for pattern in _BLOCKED_PATTERNS:
+		if code.find(pattern) != -1:
+			return {"error": {"code": -2, "message": "Blocked: '%s' access is not allowed in run_script" % pattern}}
+
+	# Build dynamic GDScript
+	var script := GDScript.new()
+	var source: String = "extends RefCounted\n\n"
+	source += "var _tree_ref: SceneTree\n\n"
+	source += "func get_tree() -> SceneTree:\n\treturn _tree_ref\n\n"
+	source += "func execute() -> Variant:\n"
+
+	var lines: PackedStringArray = code.split("\n")
+	for line in lines:
+		source += "\t" + line + "\n"
+
+	# If user code doesn't have explicit return, add return null
+	var has_return: bool = false
+	for line in lines:
+		if line.strip_edges().begins_with("return ") or line.strip_edges() == "return":
+			has_return = true
+			break
+	if not has_return:
+		source += "\treturn null\n"
+
+	script.source_code = source
+
+	# Compile
+	var err: int = script.reload()
+	if err != OK:
+		return {"error": {"code": -1, "message": "Compile error (code %d). Source:\n%s" % [err, source]}}
+
+	# Execute
+	var instance: RefCounted = script.new()
+	instance._tree_ref = get_tree()
+
+	var result = instance.execute()
+
+	return {"result": {"value": _safe_value(result)}}
+
+
+func _cmd_batch(params: Dictionary) -> Dictionary:
+	var expressions: Array = params.get("expressions", [])
+	var results: Array = []
+
+	for expr_str in expressions:
+		var expr := Expression.new()
+		var err: int = expr.parse(str(expr_str))
+		if err != OK:
+			results.append({"expr": str(expr_str), "status": "error", "message": "Parse error: %s" % expr.get_error_text()})
+			continue
+		var val = expr.execute([], get_tree().root)
+		if expr.has_execute_failed():
+			results.append({"expr": str(expr_str), "status": "error", "message": "Execution error: %s" % expr.get_error_text()})
+			continue
+		results.append({"expr": str(expr_str), "status": "ok", "value": _safe_value(val)})
+
+	return {"result": results}
 
 
 ## ── Serialization helpers ──

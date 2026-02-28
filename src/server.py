@@ -33,11 +33,16 @@ TOOLS = [
     Tool(
         name="godot_launch",
         description=(
-            "Launch Godot game process. "
-            "mode: 'headless' (no GUI), 'windowed' (GUI), or 'editor'. "
-            "scene: scene path to run (empty = main scene). "
-            "extra_args: additional Godot CLI arguments. "
-            "test_harness: inject WebSocket test bridge for Phase 2 tools (default true)."
+            "Launch Godot game process with optional test harness injection.\n\n"
+            "Example 1 — Launch headless with test harness:\n"
+            "  mode: 'headless', test_harness: true\n"
+            "  → {status: 'launched', pid: 1234, ws_connected: true}\n\n"
+            "Example 2 — Launch with GUI for visual testing:\n"
+            "  mode: 'windowed', scene: 'res://test_scene.tscn'\n"
+            "  → {status: 'launched', pid: 1235, ws_connected: true}\n\n"
+            "After launch, use godot_inspect to discover the game's API. "
+            "If the game needs setup (e.g., spawning entities), use godot_call_method.\n"
+            "USE THIS as the first step in any test session."
         ),
         inputSchema={
             "type": "object",
@@ -46,7 +51,7 @@ TOOLS = [
                     "type": "string",
                     "enum": ["headless", "windowed", "editor"],
                     "default": "headless",
-                    "description": "Run mode: headless (no GUI), windowed (GUI), or editor",
+                    "description": "Run mode: headless (no GUI, fastest), windowed (GUI), or editor",
                 },
                 "scene": {
                     "type": "string",
@@ -62,14 +67,19 @@ TOOLS = [
                 "test_harness": {
                     "type": "boolean",
                     "default": True,
-                    "description": "Inject WebSocket test harness for Phase 2 tools",
+                    "description": "Inject WebSocket test harness for interactive tools (godot_eval, godot_inspect, etc.)",
                 },
             },
         },
     ),
     Tool(
         name="godot_stop",
-        description="Stop the running Godot process. Cleans up test harness if injected.",
+        description=(
+            "Stop the running Godot process and clean up test harness.\n\n"
+            "Example — Graceful stop:\n"
+            "  force: false → {status: 'stopped', exit_code: 0, runtime_seconds: 12.5}\n\n"
+            "USE THIS when done testing. Always call this to ensure harness cleanup."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -83,7 +93,14 @@ TOOLS = [
     ),
     Tool(
         name="godot_get_errors",
-        description="Get captured errors and/or warnings from the running or last-run Godot process.",
+        description=(
+            "Get captured errors and/or warnings from the running or last-run Godot process.\n\n"
+            "Example — Get all errors:\n"
+            "  level: 'error'\n"
+            "  → {error_count: 2, errors: [{level: 'error', category: 'SCRIPT_ERROR', "
+            "source: 'res://main.gd', line: 42, message: '...'}]}\n\n"
+            "USE THIS after godot_run_and_check or during a running session to check for issues."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -98,7 +115,14 @@ TOOLS = [
     ),
     Tool(
         name="godot_get_output",
-        description="Get raw stdout/stderr output from the Godot process.",
+        description=(
+            "Get raw stdout/stderr output from the Godot process.\n\n"
+            "Example — Get last 50 lines:\n"
+            "  tail_lines: 50\n"
+            "  → {line_count: 50, output: '...'}\n\n"
+            "USE THIS for debugging when errors don't capture what you need. "
+            "Supports regex filtering with filter_pattern."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -119,8 +143,13 @@ TOOLS = [
         name="godot_run_and_check",
         description=(
             "Launch game, run for N seconds, collect errors, stop, return PASS/FAIL verdict. "
-            "This is the primary tool for automated verification after code changes. "
-            "Does NOT inject test harness (Phase 1 error-check only)."
+            "This is the primary tool for automated verification after code changes.\n\n"
+            "Example — Quick 10-second check:\n"
+            "  seconds: 10, mode: 'headless'\n"
+            "  → {result: 'PASS', runtime_seconds: 10.0, error_count: 0, "
+            "summary: 'Game ran for 10.0s with no errors.'}\n\n"
+            "USE THIS for quick pass/fail verification. Does NOT inject test harness. "
+            "USE godot_launch with test_harness=true when you need interactive tools."
         ),
         inputSchema={
             "type": "object",
@@ -153,13 +182,22 @@ TOOLS = [
         name="godot_headless_import",
         description=(
             "Run Godot --headless --quit to verify project imports/parses correctly. "
-            "Equivalent to a quick parse-check gate."
+            "Equivalent to a quick parse-check gate.\n\n"
+            "Example:\n"
+            "  → {result: 'PASS', exit_code: 0, error_count: 0}\n\n"
+            "USE THIS as a fast pre-check before running the game. "
+            "Catches syntax errors and resource issues without running the game."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="godot_get_status",
-        description="Get current Godot process status (running/stopped/crashed).",
+        description=(
+            "Get current Godot process status.\n\n"
+            "Example:\n"
+            "  → {status: 'running', pid: 1234, uptime_seconds: 30.5, ws_connected: true}\n\n"
+            "USE THIS to check if Godot is running before calling other tools."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     # ── Phase 2 tools ────────────────────────────────────────────────
@@ -167,15 +205,25 @@ TOOLS = [
         name="godot_get_tree",
         description=(
             "Get scene tree overview: root children, node count, current scene, paused state. "
-            "Requires Godot running with test_harness=true."
+            "Requires Godot running with test_harness=true.\n\n"
+            "Example:\n"
+            "  → {root_children: [{name: 'Main', class: 'Node2D'}, ...], "
+            "node_count: 150, current_scene: 'Main', paused: false}\n\n"
+            "START HERE to see what's in the scene. Then use godot_inspect on specific nodes. "
+            "USE THIS as the first exploration step after godot_launch."
         ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="godot_get_node",
         description=(
-            "Get node info + all script variables at a given path (e.g. '/root/Main'). "
-            "Requires test harness."
+            "Get node info + all script variables at a given path. Requires test harness.\n\n"
+            "Example:\n"
+            "  path: '/root/Main'\n"
+            "  → {path: '/root/Main', class: 'Node2D', name: 'Main', "
+            "properties: {score: 100, lives: 3}}\n\n"
+            "USE THIS to read all script variables on a specific node. "
+            "USE godot_inspect for deeper introspection (methods, signals, children)."
         ),
         inputSchema={
             "type": "object",
@@ -190,7 +238,14 @@ TOOLS = [
     ),
     Tool(
         name="godot_get_property",
-        description="Get a single property value from a node. Requires test harness.",
+        description=(
+            "Get a single property value from a node. Requires test harness.\n\n"
+            "Example:\n"
+            "  path: '/root/Main', property: 'score'\n"
+            "  → {path: '/root/Main', property: 'score', value: 100}\n\n"
+            "USE THIS for reading one specific property. "
+            "USE godot_batch to read multiple values at once (faster)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -208,7 +263,14 @@ TOOLS = [
     ),
     Tool(
         name="godot_set_property",
-        description="Set a property on a node. Requires test harness.",
+        description=(
+            "Set a property on a node. Requires test harness.\n\n"
+            "Example:\n"
+            "  path: '/root/Main', property: 'score', value: 999\n"
+            "  → {ok: true}\n\n"
+            "USE THIS to modify game state for testing. "
+            "USE godot_call_method to trigger behavior changes instead."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -229,7 +291,14 @@ TOOLS = [
     ),
     Tool(
         name="godot_call_method",
-        description="Call a method on a node and return the result. Requires test harness.",
+        description=(
+            "Call a method on a node and return the result. Requires test harness.\n\n"
+            "Example:\n"
+            "  path: '/root/Main', method: 'reset_game', args: []\n"
+            "  → {return_value: null}\n\n"
+            "USE THIS to trigger game actions (reset, spawn, etc.). "
+            "USE godot_run_script when you need to chain multiple calls with logic."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -252,7 +321,14 @@ TOOLS = [
     ),
     Tool(
         name="godot_get_group",
-        description="Get all nodes in a group. Requires test harness.",
+        description=(
+            "Get all nodes in a group. Requires test harness.\n\n"
+            "Example:\n"
+            "  group: 'enemies'\n"
+            "  → {group: 'enemies', count: 5, nodes: [{name: 'Goblin', path: '/root/Main/Goblin', class: 'CharacterBody2D'}, ...]}\n\n"
+            "USE THIS to find nodes by group membership. "
+            "USE godot_get_tree for overall scene structure."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -266,35 +342,172 @@ TOOLS = [
     ),
     Tool(
         name="godot_ping",
-        description="Health check — verify WebSocket connection to Godot test harness is alive.",
+        description=(
+            "Health check — verify WebSocket connection to Godot test harness is alive.\n\n"
+            "Example:\n"
+            "  → {pong: true}\n\n"
+            "USE THIS to verify connection before running commands."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="godot_pause",
-        description="Pause the game simulation (get_tree().paused = true). Requires test harness.",
+        description=(
+            "Pause the game simulation (get_tree().paused = true). Requires test harness.\n\n"
+            "Example:\n"
+            "  → {paused: true}\n\n"
+            "USE THIS before inspecting or modifying game state to prevent changes during inspection."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="godot_resume",
-        description="Resume the game simulation (get_tree().paused = false). Requires test harness.",
+        description=(
+            "Resume the game simulation (get_tree().paused = false). Requires test harness.\n\n"
+            "Example:\n"
+            "  → {paused: false}\n\n"
+            "USE THIS after pausing to let the game continue running."
+        ),
         inputSchema={"type": "object", "properties": {}},
     ),
     Tool(
         name="godot_eval",
         description=(
-            "Evaluate a GDScript expression in the running game via Expression class. "
-            "Executed in the context of the scene root. Requires test harness. "
-            "Example: get_node('Main').score"
+            "Evaluate a single GDScript expression in the running game. Requires test harness. "
+            "Single expression only — no var, no loops, no multi-line.\n\n"
+            "Example 1 — Read a property:\n"
+            "  expression: \"get_node('Main').score\"\n"
+            "  → {value: 100}\n\n"
+            "Example 2 — Call a method:\n"
+            "  expression: \"get_node('Main').entity_manager.get_alive_count()\"\n"
+            "  → {value: 20}\n\n"
+            "USE THIS for simple single-expression queries.\n"
+            "USE godot_run_script for multi-line code (var, loops, conditionals).\n"
+            "USE godot_batch to evaluate multiple expressions at once (10-20x faster)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "expression": {
                     "type": "string",
-                    "description": "GDScript expression to evaluate",
+                    "description": (
+                        "GDScript expression to evaluate. Executed in scene root context. "
+                        "Example: get_node('Main').score"
+                    ),
                 },
             },
             "required": ["expression"],
+        },
+    ),
+    # ── Phase 3 tools ────────────────────────────────────────────────
+    Tool(
+        name="godot_inspect",
+        description=(
+            "Discover methods, properties, signals of any object in the running game. "
+            "Returns the object's full schema so you can plan further queries.\n\n"
+            "Example 1 — Inspect the entity manager:\n"
+            "  expression: \"get_tree().root.get_node('Main').entity_manager\"\n"
+            "  → {class: 'RefCounted', script: 'res://entity_manager.gd', "
+            "methods: [{name: 'get_alive_count', args: [], return_type: 'int'}, ...], "
+            "properties: {_entities: {type: 'Dictionary', value: '<size:20>'}}, ...}\n\n"
+            "Example 2 — Inspect a specific entity:\n"
+            "  expression: \"get_tree().root.get_node('Main').entity_manager.get_alive_entities()[0]\"\n"
+            "  → {class: 'RefCounted', properties: {personality: ..., hunger: ...}, methods: [...]}\n\n"
+            "USE THIS when you don't know what methods/properties an object has.\n"
+            "USE godot_eval or godot_batch when you already know the exact expression.\n"
+            "USE godot_run_script when you need loops, variables, or complex logic."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": (
+                        "GDScript expression that evaluates to the object to inspect. "
+                        "Executed in context of scene root. "
+                        "Example: \"get_tree().root.get_node('Main').entity_manager\""
+                    ),
+                },
+                "depth": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": (
+                        "For Node objects: 0 = list child names only, "
+                        "1 = inspect children too, 2 = grandchildren. Max 3."
+                    ),
+                },
+            },
+            "required": ["expression"],
+        },
+    ),
+    Tool(
+        name="godot_run_script",
+        description=(
+            "Execute multi-line GDScript code in the running game. Supports var declarations, "
+            "loops, conditionals — anything GDScript can do. Returns the value from 'return' statement.\n\n"
+            "Example 1 — Collect all agent health values:\n"
+            "  code: \"var em = get_tree().root.get_node('Main').entity_manager\\n"
+            "var results = []\\n"
+            "for e in em.get_alive_entities():\\n"
+            "\\tresults.append({'id': e.id, 'health': e.health})\\n"
+            "return results\"\n"
+            "  → {value: [{id: 0, health: 0.85}, {id: 1, health: 0.92}, ...]}\n\n"
+            "Example 2 — Check simulation state:\n"
+            "  code: \"var sim = get_tree().root.get_node('Main').sim_engine\\n"
+            "return {'tick': sim.current_tick, 'paused': sim.is_paused}\"\n"
+            "  → {value: {tick: 1500, paused: false}}\n\n"
+            "USE THIS when you need loops, variables, or multi-step logic.\n"
+            "USE godot_eval for simple single-expression queries.\n"
+            "USE godot_batch to evaluate multiple simple expressions at once.\n"
+            "NOTE: OS, FileAccess, DirAccess are blocked for security."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": (
+                        "Multi-line GDScript code. Use \\n for newlines, \\t for indentation. "
+                        "get_tree() is available. Must use 'return <value>' to return data. "
+                        "OS/File access is blocked."
+                    ),
+                },
+            },
+            "required": ["code"],
+        },
+    ),
+    Tool(
+        name="godot_batch",
+        description=(
+            "Evaluate multiple GDScript expressions in a single round-trip. "
+            "Each expression is independent (like calling godot_eval N times but 10-20x faster).\n\n"
+            "Example — Check 3 values at once:\n"
+            "  expressions: [\n"
+            "    \"get_node('Main').entity_manager.get_alive_count()\",\n"
+            "    \"get_node('Main').sim_engine.current_tick\",\n"
+            "    \"get_node('Main').sim_engine.is_paused\"\n"
+            "  ]\n"
+            "  → [{expr: '...alive_count()', status: 'ok', value: 20},\n"
+            "      {expr: '...current_tick', status: 'ok', value: 1500},\n"
+            "      {expr: '...is_paused', status: 'ok', value: false}]\n\n"
+            "USE THIS when checking multiple simple values (e.g., verifying 5 properties).\n"
+            "USE godot_eval for a single expression.\n"
+            "USE godot_run_script when expressions depend on each other (need variables)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "expressions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Array of GDScript expressions to evaluate. "
+                        "Each runs independently in scene root context. "
+                        "Results returned in same order."
+                    ),
+                },
+            },
+            "required": ["expressions"],
         },
     ),
 ]
@@ -343,6 +556,13 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         return await _godot_resume(arguments)
     elif name == "godot_eval":
         return await _godot_eval(arguments)
+    # Phase 3 tools
+    elif name == "godot_inspect":
+        return await _godot_inspect(arguments)
+    elif name == "godot_run_script":
+        return await _godot_run_script(arguments)
+    elif name == "godot_batch":
+        return await _godot_batch(arguments)
     else:
         return _text({"error": f"Unknown tool: {name}"})
 
@@ -634,6 +854,25 @@ async def _godot_resume(args: dict) -> list[TextContent]:
 
 async def _godot_eval(args: dict) -> list[TextContent]:
     return await _ws_tool("eval", {"expression": args.get("expression", "")})
+
+
+# ── Phase 3 tool implementations ─────────────────────────────────────────
+
+
+async def _godot_inspect(args: dict) -> list[TextContent]:
+    params = {"expression": args.get("expression", "")}
+    depth = args.get("depth", 0)
+    if depth:
+        params["depth"] = depth
+    return await _ws_tool("inspect", params)
+
+
+async def _godot_run_script(args: dict) -> list[TextContent]:
+    return await _ws_tool("run_script", {"code": args.get("code", "")})
+
+
+async def _godot_batch(args: dict) -> list[TextContent]:
+    return await _ws_tool("batch", {"expressions": args.get("expressions", [])})
 
 
 # ── Entrypoint ──────────────────────────────────────────────────────────

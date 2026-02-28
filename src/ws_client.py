@@ -33,12 +33,17 @@ class GodotWebSocketClient:
     async def connect(self, retries: int = 15, delay: float = 0.5) -> None:
         """Connect to Godot WS server with retries.
 
-        Godot needs time to boot. Default: 15 retries x 0.5s = 7.5s max.
+        Two-phase approach:
+          Phase 1: Standard retries (retries × delay)
+          Phase 2: If phase 1 fails, try 5 more attempts with 3s delay
+                   (fallback for stdout buffering issues in headless mode)
 
         Raises:
             ConnectionError: If all retries fail.
         """
         last_error: Exception | None = None
+
+        # Phase 1: Standard retries (existing behavior)
         for _ in range(retries):
             try:
                 self._ws = await websockets.connect(self.url)
@@ -55,9 +60,26 @@ class GodotWebSocketClient:
                     self._ws = None
                 await asyncio.sleep(delay)
 
+        # Phase 2: Extended fallback (for headless stdout buffering)
+        for _ in range(5):
+            try:
+                self._ws = await websockets.connect(self.url)
+                result = await self.send_command("ping")
+                if result.get("pong"):
+                    return
+            except (ConnectionRefusedError, OSError, asyncio.TimeoutError) as e:
+                last_error = e
+                if self._ws:
+                    try:
+                        await self._ws.close()
+                    except Exception:
+                        pass
+                    self._ws = None
+                await asyncio.sleep(3.0)  # Longer delay for fallback
+
         raise ConnectionError(
             f"Cannot connect to Godot TestHarness at {self.url} "
-            f"after {retries} attempts. Last error: {last_error}"
+            f"after {retries + 5} attempts. Last error: {last_error}"
         )
 
     async def disconnect(self) -> None:

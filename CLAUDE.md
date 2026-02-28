@@ -43,9 +43,10 @@ MCP server that lets AI coding assistants (Claude Code, Cursor, etc.) automatica
 
 **Phase 1**: Launch + error capture (subprocess stdout/stderr)
 **Phase 2**: Tick control + entity state query (WebSocket)
-**Phase 3**: Cheat commands + assertions
-**Phase 4**: Rust/GPU profiling
-**Phase 5**: CI/CD integration
+**Phase 3**: Self-discovery tools + zero-touch injection (override.cfg, inspect, run_script, batch)
+**Phase 4**: Cheat commands + assertions
+**Phase 5**: Rust/GPU profiling
+**Phase 6**: CI/CD integration
 
 ## Tech Stack
 
@@ -72,11 +73,16 @@ godot-test-mcp/
 │   ├── server.py                # MCP server entrypoint + tool registration
 │   ├── godot_process.py         # GodotProcessManager: async subprocess lifecycle
 │   ├── error_parser.py          # ErrorParser: regex-based Godot error classification
-│   └── config.py                # Config: Godot/project path resolution
+│   ├── config.py                # Config: Godot/project path resolution
+│   ├── ws_client.py             # WebSocket client for Phase 2+ harness comms
+│   ├── injector.py              # HarnessInjector: override.cfg-based harness injection
+│   └── harness/
+│       └── test_harness.gd      # GDScript harness autoload (injected at runtime)
 ├── tests/
 │   ├── __init__.py
 │   ├── test_error_parser.py     # ErrorParser unit tests
-│   └── test_config.py           # Config resolution tests
+│   ├── test_config.py           # Config resolution tests
+│   └── test_harness_commands.py # Phase 3 harness command integration tests
 ├── pyproject.toml               # Package definition + dependencies
 ├── README.md
 ├── LICENSE                      # MIT
@@ -102,6 +108,17 @@ All tools are defined in `server.py`. Every tool returns a `dict` with predictab
 - All tools return `dict` (never raw strings, never None)
 - Error tool responses include `"status": "error"` and `"message": str`
 - Success responses include context-specific keys documented in the tool's docstring
+- Phase 3 tools: `godot_inspect`, `godot_run_script`, `godot_batch`
+- Phase 3 harness commands: `inspect`, `run_script`, `batch` (mapped 1:1 from MCP tools)
+
+### Injector Strategy
+
+The `HarnessInjector` uses Godot's `override.cfg` mechanism:
+1. Harness GDScript → `.godot/test_mcp/test_harness.gd` (gitignored)
+2. Autoload entry → `override.cfg` (overrides project.godot without modifying it)
+3. Cleanup → removes both files, restores any pre-existing override.cfg
+
+**project.godot is NEVER read, modified, or backed up.**
 
 ### ParsedError Schema
 
