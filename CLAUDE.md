@@ -114,7 +114,7 @@ All tools are defined in `server.py`. Every tool returns a `dict` with predictab
 ### Injector Strategy
 
 The `HarnessInjector` uses Godot's `override.cfg` mechanism:
-1. Harness GDScript → `.godot/test_mcp/test_harness.gd` (gitignored)
+1. Harness GDScript → `addons/test_mcp/test_harness.gd`
 2. Autoload entry → `override.cfg` (overrides project.godot without modifying it)
 3. Cleanup → removes both files, restores any pre-existing override.cfg
 

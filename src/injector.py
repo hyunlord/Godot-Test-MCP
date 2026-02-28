@@ -10,8 +10,8 @@ import shutil
 from pathlib import Path
 
 
-# Harness destination inside .godot/ (already gitignored by Godot)
-HARNESS_DIR = ".godot/test_mcp"
+# Harness destination inside addons/ (visible to Godot's resource system)
+HARNESS_DIR = "addons/test_mcp"
 HARNESS_FILENAME = "test_harness.gd"
 AUTOLOAD_NAME = "GodotTestMcpHarness"
 OVERRIDE_CFG = "override.cfg"
@@ -27,9 +27,9 @@ class HarnessInjector:
     """Manages injection and cleanup of test harness in a Godot project.
 
     Strategy:
-      1. Copy test_harness.gd to .godot/test_mcp/ (already gitignored)
+      1. Copy test_harness.gd to addons/test_mcp/
       2. Write override.cfg with autoload entry (Godot reads this automatically)
-      3. On cleanup: delete override.cfg + .godot/test_mcp/, restore backup
+      3. On cleanup: delete override.cfg + addons/test_mcp/, restore backup
 
     This avoids all project.godot parsing and modification.
     """
