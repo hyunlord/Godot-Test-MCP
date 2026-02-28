@@ -43,7 +43,7 @@ MCP server that lets AI coding assistants (Claude Code, Cursor, etc.) automatica
 
 **Phase 1**: Launch + error capture (subprocess stdout/stderr)
 **Phase 2**: Tick control + entity state query (WebSocket)
-**Phase 3**: Self-discovery tools + zero-touch injection (override.cfg, inspect, run_script, batch)
+**Phase 3**: Self-discovery tools + zero-touch injection (project.godot, inspect, run_script, batch)
 **Phase 4**: Cheat commands + assertions
 **Phase 5**: Rust/GPU profiling
 **Phase 6**: CI/CD integration
@@ -113,12 +113,18 @@ All tools are defined in `server.py`. Every tool returns a `dict` with predictab
 
 ### Injector Strategy
 
-The `HarnessInjector` uses Godot's `override.cfg` mechanism:
+The `HarnessInjector` modifies `project.godot` directly:
 1. Harness GDScript → `addons/test_mcp/test_harness.gd`
-2. Autoload entry → `override.cfg` (overrides project.godot without modifying it)
-3. Cleanup → removes both files, restores any pre-existing override.cfg
+2. Autoload entry → appended to `[autoload]` section of `project.godot`
+3. Cleanup → removes the single added line from `project.godot`, deletes harness files
 
-**project.godot is NEVER read, modified, or backed up.**
+**Why not override.cfg**: Godot 4's `override.cfg` can only override settings that
+already exist in `project.godot`.  It silently ignores NEW autoload entries.
+Direct `project.godot` modification is the only reliable injection mechanism.
+
+**Surgical change**: exactly one line is added to `project.godot` (and removed on
+cleanup).  The file is never re-formatted.  Crash recovery: a stale entry is
+detected by `AUTOLOAD_NAME` presence and removed before re-injecting.
 
 ### ParsedError Schema
 

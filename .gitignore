@@ -6,3 +6,5 @@ build/
 .venv/
 .env
 .omc/
+uv.lock
+.omx/

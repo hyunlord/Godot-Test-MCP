@@ -1,7 +1,14 @@
 """Inject and cleanup test harness GDScript in target Godot project.
 
-Uses override.cfg instead of modifying project.godot, ensuring zero
-impact on the target project's configuration files.
+Modifies project.godot directly to register the harness autoload.
+override.cfg cannot add NEW autoload entries in Godot 4 — it only overrides
+values for autoloads already declared in project.godot.  Direct modification
+is therefore the only reliable injection mechanism.
+
+Modification is surgical: exactly one line is appended inside the existing
+[autoload] section (or a new section is created if none exists).  Cleanup
+removes that exact line.  project.godot is never re-formatted or rewritten
+beyond the single-line addition/removal.
 """
 
 from __future__ import annotations
@@ -14,13 +21,11 @@ from pathlib import Path
 HARNESS_DIR = "addons/test_mcp"
 HARNESS_FILENAME = "test_harness.gd"
 AUTOLOAD_NAME = "GodotTestMcpHarness"
-OVERRIDE_CFG = "override.cfg"
 
-# Marker comment so we can identify our override.cfg during crash recovery
-MARKER = "# godot-test-mcp-injected"
-
-# Disk backup filename (stored inside HARNESS_DIR)
-_BACKUP_FILENAME = "override.cfg.bak"
+# Full autoload entry written to project.godot — also serves as the
+# crash-recovery marker (presence of AUTOLOAD_NAME is sufficient to detect
+# a stale injection from a previous run).
+_AUTOLOAD_ENTRY = f'{AUTOLOAD_NAME}="*res://{HARNESS_DIR}/{HARNESS_FILENAME}"'
 
 
 class HarnessInjector:
@@ -28,73 +33,46 @@ class HarnessInjector:
 
     Strategy:
       1. Copy test_harness.gd to addons/test_mcp/
-      2. Write override.cfg with autoload entry (Godot reads this automatically)
-      3. On cleanup: delete override.cfg + addons/test_mcp/, restore backup
+      2. Append one autoload line to project.godot's [autoload] section
+         (creates the section if absent)
+      3. On cleanup: remove that line from project.godot, delete harness files
 
-    This avoids all project.godot parsing and modification.
+    Crash recovery: a new HarnessInjector instance detects the stale entry
+    via AUTOLOAD_NAME in project.godot and removes it on cleanup().
     """
 
     def __init__(self, project_path: str) -> None:
         self._project = Path(project_path)
-        self._override_file = self._project / OVERRIDE_CFG
         self._harness_dir = self._project / HARNESS_DIR
         self._harness_file = self._harness_dir / HARNESS_FILENAME
-        self._backup_file = self._harness_dir / _BACKUP_FILENAME
-        self._override_backup: str | None = None
+        self._project_godot = self._project / "project.godot"
 
     def inject(self) -> None:
-        """Copy harness GDScript and create override.cfg for autoload.
+        """Copy harness GDScript and register it as an autoload in project.godot.
 
         Safe to call multiple times — cleans up first if already injected.
-        Handles crash recovery: stale override.cfg from previous crash is
-        detected via marker comment and cleaned up automatically.
+        Handles crash recovery: stale entry from a previous crash is detected
+        via AUTOLOAD_NAME and removed automatically before re-injecting.
         """
-        self.cleanup()  # Ensure clean state (handles crash recovery)
+        self.cleanup()  # Ensure clean state / handle crash recovery
 
         # 1. Copy harness GDScript from package data
         self._harness_dir.mkdir(parents=True, exist_ok=True)
         harness_source = Path(__file__).parent / "harness" / HARNESS_FILENAME
         shutil.copy2(harness_source, self._harness_file)
 
-        # 2. Backup existing override.cfg if present (and not ours from a crash)
-        if self._override_file.exists():
-            content = self._override_file.read_text(encoding="utf-8")
-            if MARKER not in content:
-                self._override_backup = content
-                self._backup_file.write_text(content, encoding="utf-8")
-
-        # 3. Write override.cfg with our autoload
-        self._override_file.write_text(
-            f"{MARKER}\n"
-            f"[autoload]\n"
-            f"\n"
-            f'{AUTOLOAD_NAME}="*res://{HARNESS_DIR}/{HARNESS_FILENAME}"\n',
-            encoding="utf-8",
-        )
+        # 2. Register autoload in project.godot
+        self._add_autoload_entry()
 
     def cleanup(self) -> None:
-        """Remove injected harness and restore override.cfg.
+        """Remove harness autoload from project.godot and delete harness files.
 
         Safe to call even if nothing was injected.
         """
-        # 1. Restore or remove override.cfg
-        if self._override_backup is not None:
-            # Normal path: restore from in-memory backup
-            self._override_file.write_text(self._override_backup, encoding="utf-8")
-            self._override_backup = None
-        elif self._backup_file.exists():
-            # Crash recovery: restore from disk backup
-            restored = self._backup_file.read_text(encoding="utf-8")
-            self._override_file.write_text(restored, encoding="utf-8")
-        elif self._override_file.exists():
-            # No backup — only remove if it's ours (has marker)
-            content = self._override_file.read_text(encoding="utf-8")
-            if MARKER in content:
-                self._override_file.unlink()
+        # 1. Remove autoload entry from project.godot
+        self._remove_autoload_entry()
 
-        # 2. Remove harness files (including disk backup)
-        if self._backup_file.exists():
-            self._backup_file.unlink()
+        # 2. Remove harness files
         if self._harness_file.exists():
             self._harness_file.unlink()
         if self._harness_dir.exists():
@@ -107,3 +85,67 @@ class HarnessInjector:
     def is_injected(self) -> bool:
         """Return True if harness file exists in target project."""
         return self._harness_file.exists()
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _add_autoload_entry(self) -> None:
+        """Append harness autoload line to project.godot's [autoload] section.
+
+        Inserts at the end of an existing [autoload] section, or creates a new
+        section at the end of the file.  Skips silently if already present.
+        """
+        if not self._project_godot.exists():
+            return
+
+        content = self._project_godot.read_text(encoding="utf-8")
+
+        # Idempotency / crash recovery: skip if already present
+        if _AUTOLOAD_ENTRY in content:
+            return
+
+        lines = content.splitlines(keepends=True)
+        result: list[str] = []
+        in_autoload = False
+        inserted = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Entering [autoload] section
+            if stripped == "[autoload]":
+                in_autoload = True
+                result.append(line)
+                continue
+
+            # New section starts while inside [autoload] — insert before it
+            if in_autoload and stripped.startswith("[") and stripped.endswith("]"):
+                result.append(_AUTOLOAD_ENTRY + "\n")
+                inserted = True
+                in_autoload = False
+
+            result.append(line)
+
+        if not inserted:
+            if in_autoload:
+                # [autoload] was the last section (end of file)
+                result.append(_AUTOLOAD_ENTRY + "\n")
+            else:
+                # No [autoload] section — append a new one
+                if result and not result[-1].endswith("\n"):
+                    result.append("\n")
+                result.append(f"\n[autoload]\n\n{_AUTOLOAD_ENTRY}\n")
+
+        self._project_godot.write_text("".join(result), encoding="utf-8")
+
+    def _remove_autoload_entry(self) -> None:
+        """Remove the harness autoload line from project.godot."""
+        if not self._project_godot.exists():
+            return
+
+        content = self._project_godot.read_text(encoding="utf-8")
+        if _AUTOLOAD_ENTRY not in content:
+            return
+
+        lines = content.splitlines(keepends=True)
+        new_lines = [ln for ln in lines if ln.strip() != _AUTOLOAD_ENTRY]
+        self._project_godot.write_text("".join(new_lines), encoding="utf-8")

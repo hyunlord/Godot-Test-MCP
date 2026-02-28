@@ -595,7 +595,7 @@ async def _godot_launch(args: dict) -> list[TextContent]:
     if test_harness:
         # 3. Try stdout-based harness detection first
         try:
-            port = await manager.wait_for_harness(timeout=15.0)
+            port = await manager.wait_for_harness(timeout=60.0)
             ws_client.port = port
             await ws_client.connect()
             ws_connected = True

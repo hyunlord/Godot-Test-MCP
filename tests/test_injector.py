@@ -1,4 +1,9 @@
-"""Unit tests for HarnessInjector (override.cfg approach)."""
+"""Unit tests for HarnessInjector (project.godot modification approach).
+
+The injector now writes directly to project.godot instead of using override.cfg
+because Godot 4 override.cfg cannot add NEW autoload entries — only override
+values for autoloads already declared in project.godot.
+"""
 
 from __future__ import annotations
 
@@ -10,38 +15,40 @@ from src.injector import (
     AUTOLOAD_NAME,
     HARNESS_DIR,
     HARNESS_FILENAME,
-    MARKER,
-    OVERRIDE_CFG,
     HarnessInjector,
+    _AUTOLOAD_ENTRY,
+)
+
+_PROJECT_GODOT_WITH_AUTOLOAD = (
+    "[gd_resource]\nconfig_version=5\n\n"
+    "[application]\nrun/main_scene=\"res://main.tscn\"\n\n"
+    "[autoload]\n\n"
+    'SomeManager="*res://some_manager.gd"\n\n'
+    "[display]\nwindow/size/viewport_width=1920\n"
+)
+
+_PROJECT_GODOT_NO_AUTOLOAD = (
+    "[gd_resource]\nconfig_version=5\n\n"
+    "[application]\nrun/main_scene=\"res://main.tscn\"\n"
 )
 
 
 @pytest.fixture
 def fake_project(tmp_path: Path) -> Path:
-    """Create a minimal fake Godot project directory."""
-    godot_file = tmp_path / "project.godot"
-    godot_file.write_text(
-        '[gd_resource]\nconfig_version=5\n\n[application]\nrun/main_scene="res://main.tscn"\n',
-        encoding="utf-8",
+    """Fake Godot project WITH an existing [autoload] section."""
+    (tmp_path / "project.godot").write_text(
+        _PROJECT_GODOT_WITH_AUTOLOAD, encoding="utf-8"
     )
-    # Ensure harness source exists (test prerequisite)
     harness_src = Path(__file__).parent.parent / "src" / "harness" / HARNESS_FILENAME
     assert harness_src.exists(), f"Harness source not found at {harness_src}"
     return tmp_path
 
 
 @pytest.fixture
-def fake_project_with_override(tmp_path: Path) -> Path:
-    """Create a fake Godot project that already has an override.cfg."""
-    godot_file = tmp_path / "project.godot"
-    godot_file.write_text(
-        '[gd_resource]\nconfig_version=5\n',
-        encoding="utf-8",
-    )
-    override_file = tmp_path / OVERRIDE_CFG
-    override_file.write_text(
-        '[rendering]\nrenderer/rendering_method="forward_plus"\n',
-        encoding="utf-8",
+def fake_project_no_autoload(tmp_path: Path) -> Path:
+    """Fake Godot project WITHOUT an [autoload] section."""
+    (tmp_path / "project.godot").write_text(
+        _PROJECT_GODOT_NO_AUTOLOAD, encoding="utf-8"
     )
     harness_src = Path(__file__).parent.parent / "src" / "harness" / HARNESS_FILENAME
     assert harness_src.exists()
@@ -59,47 +66,70 @@ class TestInject:
         content = harness_file.read_text(encoding="utf-8")
         assert "TestHarness" in content
 
-    def test_inject_creates_override_cfg(self, fake_project: Path) -> None:
+    def test_inject_adds_autoload_to_project_godot(self, fake_project: Path) -> None:
         injector = HarnessInjector(str(fake_project))
         injector.inject()
-        override = fake_project / OVERRIDE_CFG
-        assert override.exists()
-        content = override.read_text(encoding="utf-8")
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert _AUTOLOAD_ENTRY in content
+        assert AUTOLOAD_NAME in content
+
+    def test_inject_autoload_entry_in_autoload_section(self, fake_project: Path) -> None:
+        """Entry must appear inside the [autoload] section, not elsewhere."""
+        injector = HarnessInjector(str(fake_project))
+        injector.inject()
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        lines = content.splitlines()
+        autoload_idx = next(i for i, l in enumerate(lines) if l.strip() == "[autoload]")
+        entry_idx = next(i for i, l in enumerate(lines) if l.strip() == _AUTOLOAD_ENTRY)
+        # Entry must come after [autoload] header
+        assert entry_idx > autoload_idx
+        # Entry must come before any subsequent section header (if any)
+        next_section = next(
+            (i for i, l in enumerate(lines) if i > autoload_idx and l.startswith("[") and l.strip() != "[autoload]"),
+            len(lines),
+        )
+        assert entry_idx < next_section
+
+    def test_inject_creates_autoload_section_when_absent(
+        self, fake_project_no_autoload: Path
+    ) -> None:
+        injector = HarnessInjector(str(fake_project_no_autoload))
+        injector.inject()
+        content = (fake_project_no_autoload / "project.godot").read_text(encoding="utf-8")
         assert "[autoload]" in content
-        assert AUTOLOAD_NAME in content
+        assert _AUTOLOAD_ENTRY in content
 
-    def test_inject_override_has_marker(self, fake_project: Path) -> None:
+    def test_inject_does_not_create_override_cfg(self, fake_project: Path) -> None:
         injector = HarnessInjector(str(fake_project))
         injector.inject()
-        content = (fake_project / OVERRIDE_CFG).read_text(encoding="utf-8")
-        assert MARKER in content
+        assert not (fake_project / "override.cfg").exists()
 
-    def test_inject_does_not_modify_project_godot(self, fake_project: Path) -> None:
-        original = (fake_project / "project.godot").read_text(encoding="utf-8")
+    def test_inject_preserves_existing_autoloads(self, fake_project: Path) -> None:
+        """Existing autoload entries must not be removed or altered."""
         injector = HarnessInjector(str(fake_project))
         injector.inject()
-        after = (fake_project / "project.godot").read_text(encoding="utf-8")
-        assert after == original
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert 'SomeManager="*res://some_manager.gd"' in content
 
-    def test_inject_backs_up_existing_override(self, fake_project_with_override: Path) -> None:
-        original_override = (fake_project_with_override / OVERRIDE_CFG).read_text(encoding="utf-8")
-        injector = HarnessInjector(str(fake_project_with_override))
+    def test_inject_preserves_other_sections(self, fake_project: Path) -> None:
+        injector = HarnessInjector(str(fake_project))
         injector.inject()
-        # Our override.cfg should replace the original
-        content = (fake_project_with_override / OVERRIDE_CFG).read_text(encoding="utf-8")
-        assert MARKER in content
-        assert AUTOLOAD_NAME in content
-        # Disk backup should exist
-        backup = fake_project_with_override / HARNESS_DIR / "override.cfg.bak"
-        assert backup.exists()
-        assert backup.read_text(encoding="utf-8") == original_override
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert "[display]" in content
+        assert "window/size/viewport_width=1920" in content
 
     def test_inject_is_idempotent(self, fake_project: Path) -> None:
         injector = HarnessInjector(str(fake_project))
         injector.inject()
         injector.inject()  # Should not raise or duplicate
-        content = (fake_project / OVERRIDE_CFG).read_text(encoding="utf-8")
-        assert content.count(AUTOLOAD_NAME) == 1
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert content.count(_AUTOLOAD_ENTRY) == 1
+
+    def test_inject_harness_path_uses_res_protocol(self, fake_project: Path) -> None:
+        injector = HarnessInjector(str(fake_project))
+        injector.inject()
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert f'"*res://{HARNESS_DIR}/{HARNESS_FILENAME}"' in content
 
 
 class TestCleanup:
@@ -112,11 +142,20 @@ class TestCleanup:
         injector.cleanup()
         assert not injector.is_injected
 
-    def test_cleanup_removes_override_cfg(self, fake_project: Path) -> None:
+    def test_cleanup_removes_autoload_entry(self, fake_project: Path) -> None:
         injector = HarnessInjector(str(fake_project))
         injector.inject()
         injector.cleanup()
-        assert not (fake_project / OVERRIDE_CFG).exists()
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert _AUTOLOAD_ENTRY not in content
+        assert AUTOLOAD_NAME not in content
+
+    def test_cleanup_preserves_existing_autoloads(self, fake_project: Path) -> None:
+        injector = HarnessInjector(str(fake_project))
+        injector.inject()
+        injector.cleanup()
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert 'SomeManager="*res://some_manager.gd"' in content
 
     def test_cleanup_removes_harness_dir(self, fake_project: Path) -> None:
         injector = HarnessInjector(str(fake_project))
@@ -124,54 +163,45 @@ class TestCleanup:
         injector.cleanup()
         assert not (fake_project / HARNESS_DIR).exists()
 
-    def test_cleanup_restores_existing_override(self, fake_project_with_override: Path) -> None:
-        original = (fake_project_with_override / OVERRIDE_CFG).read_text(encoding="utf-8")
-        injector = HarnessInjector(str(fake_project_with_override))
-        injector.inject()
-        injector.cleanup()
-        restored = (fake_project_with_override / OVERRIDE_CFG).read_text(encoding="utf-8")
-        assert restored == original
-
     def test_cleanup_safe_when_not_injected(self, fake_project: Path) -> None:
         injector = HarnessInjector(str(fake_project))
         injector.cleanup()  # Should not raise
 
-    def test_cleanup_does_not_touch_project_godot(self, fake_project: Path) -> None:
+    def test_cleanup_does_not_alter_other_project_godot_content(
+        self, fake_project: Path
+    ) -> None:
         original = (fake_project / "project.godot").read_text(encoding="utf-8")
         injector = HarnessInjector(str(fake_project))
         injector.inject()
         injector.cleanup()
         after = (fake_project / "project.godot").read_text(encoding="utf-8")
-        assert after == original
+        # All original lines must still be present
+        for line in original.splitlines():
+            assert line in after.splitlines(), f"Line lost: {line!r}"
 
-    def test_cleanup_crash_recovery_removes_our_override(self, fake_project: Path) -> None:
-        """Simulate crash: no in-memory backup, but our override.cfg exists."""
+    def test_cleanup_crash_recovery_removes_stale_entry(
+        self, fake_project: Path
+    ) -> None:
+        """Simulate crash: first injector object lost, second detects stale entry."""
         injector = HarnessInjector(str(fake_project))
         injector.inject()
-        # Simulate crash: new injector without in-memory backup
+        assert _AUTOLOAD_ENTRY in (fake_project / "project.godot").read_text(encoding="utf-8")
+
+        # Crash: create new injector without prior in-memory state
         injector2 = HarnessInjector(str(fake_project))
         injector2.cleanup()
-        assert not (fake_project / OVERRIDE_CFG).exists()
 
-    def test_cleanup_crash_recovery_restores_user_override(self, fake_project_with_override: Path) -> None:
-        """Simulate crash: disk backup exists, restore user's original override.cfg."""
-        original = (fake_project_with_override / OVERRIDE_CFG).read_text(encoding="utf-8")
-        injector = HarnessInjector(str(fake_project_with_override))
-        injector.inject()
-        # Simulate crash: new injector without in-memory backup
-        injector2 = HarnessInjector(str(fake_project_with_override))
-        injector2.cleanup()
-        restored = (fake_project_with_override / OVERRIDE_CFG).read_text(encoding="utf-8")
-        assert restored == original
+        content = (fake_project / "project.godot").read_text(encoding="utf-8")
+        assert _AUTOLOAD_ENTRY not in content
 
-    def test_cleanup_preserves_user_override_without_marker(self, fake_project: Path) -> None:
-        """If override.cfg exists without marker and no backup, leave it alone."""
-        user_override = fake_project / OVERRIDE_CFG
-        user_override.write_text('[display]\nwidth=800\n', encoding="utf-8")
+    def test_cleanup_crash_recovery_no_override_cfg_created(
+        self, fake_project: Path
+    ) -> None:
         injector = HarnessInjector(str(fake_project))
-        injector.cleanup()
-        assert user_override.exists()
-        assert user_override.read_text(encoding="utf-8") == '[display]\nwidth=800\n'
+        injector.inject()
+        injector2 = HarnessInjector(str(fake_project))
+        injector2.cleanup()
+        assert not (fake_project / "override.cfg").exists()
 
 
 class TestIsInjected:
@@ -185,3 +215,9 @@ class TestIsInjected:
         injector = HarnessInjector(str(fake_project))
         injector.inject()
         assert injector.is_injected
+
+    def test_not_injected_after_cleanup(self, fake_project: Path) -> None:
+        injector = HarnessInjector(str(fake_project))
+        injector.inject()
+        injector.cleanup()
+        assert not injector.is_injected
