@@ -373,22 +373,32 @@ async def _godot_launch(args: dict) -> list[TextContent]:
 
     ws_connected = False
     if test_harness:
+        # 3. Try stdout-based harness detection first
         try:
-            # 3. Wait for harness ready signal in stdout
             port = await manager.wait_for_harness(timeout=15.0)
-            # 4. Connect WebSocket
             ws_client.port = port
             await ws_client.connect()
             ws_connected = True
-        except (TimeoutError, RuntimeError, ConnectionError) as e:
-            # Harness failed — still return launched status with warning
+        except (TimeoutError, RuntimeError, ConnectionError):
+            # 4. Fallback: direct WS connection (headless stdout buffering workaround)
+            ws_client.port = 9877
+            for attempt in range(3):
+                try:
+                    await ws_client.connect()
+                    ws_connected = True
+                    break
+                except (ConnectionError, OSError):
+                    if attempt < 2:
+                        await asyncio.sleep(5.0)
+
+        if not ws_connected:
             return _text({
                 "status": "launched",
                 "pid": pid,
                 "mode": mode,
                 "test_harness": True,
                 "ws_connected": False,
-                "warning": f"Harness connection failed: {e}",
+                "warning": "Harness connection failed after stdout detection and WS fallback",
             })
 
     return _text({
