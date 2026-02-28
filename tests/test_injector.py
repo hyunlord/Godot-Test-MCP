@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.injector import AUTOLOAD_NAME, HARNESS_DIR, HARNESS_FILENAME, MARKER, HarnessInjector
+from src.injector import AUTOLOAD_LINE, AUTOLOAD_NAME, HARNESS_DIR, HARNESS_FILENAME, MARKER, HarnessInjector
 
 
 @pytest.fixture
@@ -29,6 +29,35 @@ def fake_project_with_autoload(tmp_path: Path) -> Path:
     godot_file = tmp_path / "project.godot"
     godot_file.write_text(
         '[gd_resource]\nconfig_version=5\n\n[autoload]\n\nMyGame="*res://game.gd"\n\n[application]\nrun/main_scene="res://main.tscn"\n',
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+@pytest.fixture
+def fake_project_worldsim(tmp_path: Path) -> Path:
+    """Create a fake Godot project mimicking WorldSim: multiple autoloads + [display] section."""
+    godot_file = tmp_path / "project.godot"
+    godot_file.write_text(
+        (
+            "[gd_resource]\n"
+            "config_version=5\n"
+            "\n"
+            "[application]\n"
+            "\n"
+            'config/name="WorldSim"\n'
+            'run/main_scene="res://main.tscn"\n'
+            "\n"
+            "[autoload]\n"
+            "\n"
+            'SomeAutoload="*res://autoloads/some.gd"\n'
+            'StatQuery="*res://autoloads/stat_query.gd"\n'
+            "\n"
+            "[display]\n"
+            "\n"
+            "window/size/viewport_width=1280\n"
+            "window/size/viewport_height=720\n"
+        ),
         encoding="utf-8",
     )
     return tmp_path
@@ -61,6 +90,35 @@ class TestInject:
         assert 'MyGame="*res://game.gd"' in godot_content
         # Only one [autoload] section
         assert godot_content.count("[autoload]") == 1
+
+    def test_inject_does_not_merge_with_next_section(self, fake_project_worldsim: Path) -> None:
+        """Regression: autoload line must not merge with [display] or other sections."""
+        injector = HarnessInjector(str(fake_project_worldsim))
+        injector.inject()
+        godot_content = (fake_project_worldsim / "project.godot").read_text(encoding="utf-8")
+        lines = godot_content.split("\n")
+
+        # Find the injected line
+        injected = [ln for ln in lines if MARKER in ln]
+        assert len(injected) == 1, f"Expected exactly 1 marker line, got {len(injected)}"
+
+        # The injected line must contain ONLY the autoload entry + marker
+        assert injected[0].strip() == f'{AUTOLOAD_LINE}  {MARKER}'
+
+        # [display] must remain on its own line, untouched
+        assert "[display]" in godot_content
+        display_lines = [ln for ln in lines if "[display]" in ln]
+        assert len(display_lines) == 1
+        assert display_lines[0].strip() == "[display]"
+
+        # viewport_width must NOT appear on the same line as the marker
+        for line in lines:
+            assert not (MARKER in line and "viewport_width" in line), \
+                f"Marker merged with display content: {line!r}"
+
+        # Existing autoloads preserved
+        assert 'StatQuery="*res://autoloads/stat_query.gd"' in godot_content
+        assert 'SomeAutoload="*res://autoloads/some.gd"' in godot_content
 
     def test_inject_raises_if_no_project_godot(self, tmp_path: Path) -> None:
         injector = HarnessInjector(str(tmp_path))

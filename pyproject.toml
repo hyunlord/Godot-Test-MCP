@@ -1,6 +1,6 @@
 [project]
 name = "godot-test-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "MCP server for automated Godot 4 game testing — launch, run, capture errors"
 requires-python = ">=3.10"
 license = {text = "MIT"}
