@@ -49,22 +49,26 @@ class HarnessInjector:
 
         if "[autoload]" in content:
             lines = content.split("\n")
+
+            # Step 1: Find [autoload] header
             autoload_idx = -1
-            last_autoload_line = -1
             for i, line in enumerate(lines):
                 if line.strip() == "[autoload]":
                     autoload_idx = i
-                if autoload_idx >= 0 and i > autoload_idx:
-                    if line.strip().startswith("[") and line.strip() != "[autoload]":
-                        break
-                    if "=" in line and not line.strip().startswith("#"):
-                        last_autoload_line = i
+                    break
 
-            insert_at = (
-                (last_autoload_line + 1)
-                if last_autoload_line >= 0
-                else (autoload_idx + 1)
-            )
+            # Step 2: Find next section header after [autoload]
+            section_end = len(lines)
+            for i in range(autoload_idx + 1, len(lines)):
+                if lines[i].strip().startswith("["):
+                    section_end = i
+                    break
+
+            # Step 3: Skip trailing blank lines before section_end
+            insert_at = section_end
+            while insert_at > autoload_idx + 1 and lines[insert_at - 1].strip() == "":
+                insert_at -= 1
+
             lines.insert(insert_at, f"{AUTOLOAD_LINE}  {MARKER}")
             content = "\n".join(lines)
         else:
