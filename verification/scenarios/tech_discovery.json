@@ -1,0 +1,29 @@
+{
+  "name": "tech_discovery",
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "capabilities_hook_discovery",
+      "kind": "capabilities_hook_discovery"
+    },
+    {
+      "id": "tech_discovery_gate",
+      "kind": "tech_discovery_gate",
+      "hook_method": "test_mcp_get_tech_probe",
+      "hook_args": [],
+      "tier0_first_by_tick": 30,
+      "tier0_all_by_tick": 100,
+      "required_tier0_tech_ids": [
+        "fire",
+        "stone_tools",
+        "basic_shelter",
+        "foraging_knowledge"
+      ],
+      "tier1_start_range": [50, 150],
+      "tier2_min_tick": 200,
+      "openness_tiers": [0, 1],
+      "openness_sample_size": 3,
+      "openness_min_delta": 0.0
+    }
+  ]
+}

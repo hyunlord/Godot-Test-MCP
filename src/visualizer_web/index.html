@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Godot Visualizer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1 id="title"></h1>
+      <div class="toolbar">
+        <label for="lang-select">Language</label>
+        <select id="lang-select">
+          <option value="ko">한국어</option>
+          <option value="en">English</option>
+        </select>
+        <span id="runtime-source"></span>
+      </div>
+    </header>
+    <main>
+      <section class="panel"><h2 id="label-structure"></h2><pre id="structure-content"></pre></section>
+      <section class="panel"><h2 id="label-timeline"></h2><pre id="timeline-content"></pre></section>
+      <section class="panel"><h2 id="label-causality"></h2><pre id="causality-content"></pre></section>
+      <section class="panel"><h2 id="label-diff"></h2><pre id="diff-content"></pre></section>
+      <section class="panel"><h2 id="label-inspector"></h2><pre id="inspector-content"></pre></section>
+      <section class="panel"><h2 id="label-edit"></h2><pre id="edit-content"></pre></section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

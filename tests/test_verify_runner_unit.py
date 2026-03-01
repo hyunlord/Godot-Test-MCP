@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -31,6 +33,23 @@ class TestVerifierConfig:
         args = vr.parse_args(["--project", "relative/path"])
         with pytest.raises(ValueError, match="absolute path"):
             vr.resolve_config(args)
+
+    def test_resolve_godot_path_from_argument(self, tmp_path: Path) -> None:
+        godot = tmp_path / "Godot"
+        godot.write_text("", encoding="utf-8")
+        resolved, source = vr.resolve_godot_path(str(godot))
+        assert resolved == godot.resolve()
+        assert source == "arg"
+
+    def test_resolve_godot_path_returns_none_when_not_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GODOT_PATH", raising=False)
+        fake_module = types.SimpleNamespace(
+            _resolve_godot_path=lambda: (_ for _ in ()).throw(RuntimeError("not found"))
+        )
+        monkeypatch.setitem(sys.modules, "src.config", fake_module)
+        resolved, source = vr.resolve_godot_path("")
+        assert resolved is None
+        assert source == "none"
 
 
 class TestGateHelpers:

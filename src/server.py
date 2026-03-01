@@ -16,6 +16,7 @@ from .godot_process import GodotProcessManager
 from .injector import HarnessInjector
 from .nl_compiler import NLTestCompiler
 from .nl_executor import NLExecutionContext, NLTestExecutor
+from .visualizer_service import VisualizerService
 from .ws_client import GodotWebSocketClient
 
 server = Server("godot-test-mcp")
@@ -24,6 +25,7 @@ injector: HarnessInjector | None = None
 ws_client: GodotWebSocketClient = GodotWebSocketClient()
 nl_compiler: NLTestCompiler = NLTestCompiler()
 nl_executor: NLTestExecutor = NLTestExecutor()
+visualizer_service: VisualizerService = VisualizerService()
 
 
 def _text(data: dict) -> list[TextContent]:
@@ -595,6 +597,127 @@ TOOLS = [
             "required": ["spec_text"],
         },
     ),
+    Tool(
+        name="godot_visualizer_map_project",
+        description=(
+            "Build high-resolution project visualization artifacts (static + runtime + diff) "
+            "under .godot-test-mcp/runs/<run_id>/visualizer."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "default": ""},
+                "root": {"type": "string", "default": "res://"},
+                "include_runtime": {"type": "boolean", "default": True},
+                "include_addons": {"type": "boolean", "default": False},
+                "scenario": {"type": "string", "default": ""},
+                "baseline_run_id": {"type": "string", "default": ""},
+                "open": {"type": "boolean", "default": False},
+                "locale": {"type": "string", "default": "ko"},
+            },
+        },
+    ),
+    Tool(
+        name="godot_visualizer_live_start",
+        description=(
+            "Start live visualizer server (HTTP + WebSocket) for a run's visualizer directory."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "default": ""},
+                "run_id": {"type": "string", "default": ""},
+                "port": {"type": "integer", "default": 0},
+                "scenario": {"type": "string", "default": ""},
+                "baseline_run_id": {"type": "string", "default": ""},
+                "open": {"type": "boolean", "default": False},
+                "locale": {"type": "string", "default": "ko"},
+            },
+        },
+    ),
+    Tool(
+        name="godot_visualizer_live_stop",
+        description="Stop live visualizer server.",
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="godot_visualizer_get_run",
+        description="Get one visualizer run payload by run_id.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "default": ""},
+                "run_id": {"type": "string"},
+            },
+            "required": ["run_id"],
+        },
+    ),
+    Tool(
+        name="godot_visualizer_list_runs",
+        description="List visualizer runs (latest first).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "default": ""},
+                "scenario": {"type": "string", "default": ""},
+                "limit": {"type": "integer", "default": 30},
+            },
+        },
+    ),
+    Tool(
+        name="godot_visualizer_diff_runs",
+        description="Diff one run against baseline run.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "default": ""},
+                "run_id": {"type": "string"},
+                "baseline_run_id": {"type": "string", "default": ""},
+            },
+            "required": ["run_id"],
+        },
+    ),
+    Tool(
+        name="godot_visualizer_edit_propose",
+        description="Propose a direct code edit with unified diff and approval token.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_path": {"type": "string", "default": ""},
+                "file_path": {"type": "string"},
+                "operation": {
+                    "type": "string",
+                    "enum": ["replace_text", "append_text", "set_content"],
+                },
+                "payload": {"type": "object"},
+                "reason": {"type": "string", "default": ""},
+            },
+            "required": ["file_path", "operation", "payload"],
+        },
+    ),
+    Tool(
+        name="godot_visualizer_edit_apply",
+        description="Apply approved edit proposal by session id + approval token.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "edit_session_id": {"type": "string"},
+                "approval_token": {"type": "string"},
+            },
+            "required": ["edit_session_id", "approval_token"],
+        },
+    ),
+    Tool(
+        name="godot_visualizer_edit_cancel",
+        description="Cancel pending edit proposal.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "edit_session_id": {"type": "string"},
+            },
+            "required": ["edit_session_id"],
+        },
+    ),
 ]
 
 
@@ -655,6 +778,25 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         return await _godot_compile_nl_test(arguments)
     elif name == "godot_run_nl_test":
         return await _godot_run_nl_test(arguments)
+    # ── Visualizer tools ─────────────────────────────────────────────
+    elif name == "godot_visualizer_map_project":
+        return await _godot_visualizer_map_project(arguments)
+    elif name == "godot_visualizer_live_start":
+        return await _godot_visualizer_live_start(arguments)
+    elif name == "godot_visualizer_live_stop":
+        return await _godot_visualizer_live_stop(arguments)
+    elif name == "godot_visualizer_get_run":
+        return await _godot_visualizer_get_run(arguments)
+    elif name == "godot_visualizer_list_runs":
+        return await _godot_visualizer_list_runs(arguments)
+    elif name == "godot_visualizer_diff_runs":
+        return await _godot_visualizer_diff_runs(arguments)
+    elif name == "godot_visualizer_edit_propose":
+        return await _godot_visualizer_edit_propose(arguments)
+    elif name == "godot_visualizer_edit_apply":
+        return await _godot_visualizer_edit_apply(arguments)
+    elif name == "godot_visualizer_edit_cancel":
+        return await _godot_visualizer_edit_cancel(arguments)
     else:
         return _text({"error": f"Unknown tool: {name}"})
 
@@ -1120,6 +1262,234 @@ async def _godot_run_nl_test(args: dict) -> list[TextContent]:
         context=context,
     )
     return _text(report)
+
+
+def _resolve_project_path(project_path: str = "") -> str:
+    """Resolve project path from arg or active manager config."""
+    value = str(project_path).strip()
+    if value != "":
+        return value
+    if "manager" in globals():
+        return manager._config.project_path
+    return Config.resolve().project_path
+
+
+async def _godot_visualizer_map_project(args: dict) -> list[TextContent]:
+    project_path = _resolve_project_path(str(args.get("project_path", "")))
+    root = str(args.get("root", "res://"))
+    include_runtime = bool(args.get("include_runtime", True))
+    include_addons = bool(args.get("include_addons", False))
+    scenario = str(args.get("scenario", "")).strip()
+    baseline_run_id = str(args.get("baseline_run_id", "")).strip()
+    open_browser = bool(args.get("open", False))
+    locale = str(args.get("locale", "ko")).strip()
+
+    async def _ctx_ws(method: str, params: dict | None) -> dict[str, Any]:
+        return await _ws_command(method, params)
+
+    def _ctx_errors() -> dict[str, list[dict[str, Any]]]:
+        if "manager" not in globals():
+            return {"errors": [], "warnings": []}
+        return {
+            "errors": manager.get_errors(),
+            "warnings": manager.get_warnings(),
+        }
+
+    try:
+        await visualizer_service.publish_event({"type": "tool_event", "event": "start", "tool": "godot_visualizer_map_project"})
+        result = await visualizer_service.map_project(
+            project_path=project_path,
+            root=root,
+            include_runtime=include_runtime,
+            include_addons=include_addons,
+            scenario=scenario,
+            baseline_run_id=baseline_run_id,
+            locale=locale,
+            ws_command=_ctx_ws,
+            read_errors=_ctx_errors,
+            open_browser=open_browser,
+        )
+        await visualizer_service.publish_event(
+            {
+                "type": "tool_event",
+                "event": "end",
+                "tool": "godot_visualizer_map_project",
+                "success": True,
+                "run_id": result.get("run_id"),
+            }
+        )
+        return _text(result)
+    except Exception as exc:
+        await visualizer_service.publish_event(
+            {
+                "type": "tool_event",
+                "event": "end",
+                "tool": "godot_visualizer_map_project",
+                "success": False,
+                "error": str(exc),
+            }
+        )
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_live_start(args: dict) -> list[TextContent]:
+    project_path = _resolve_project_path(str(args.get("project_path", "")))
+    run_id = str(args.get("run_id", "")).strip()
+    port = int(args.get("port", 0))
+    scenario = str(args.get("scenario", "")).strip()
+    baseline_run_id = str(args.get("baseline_run_id", "")).strip()
+    open_browser = bool(args.get("open", False))
+    locale = str(args.get("locale", "ko")).strip()
+
+    try:
+        selected_run_id = run_id
+        if selected_run_id == "":
+            mapped = await _godot_visualizer_map_project(
+                {
+                    "project_path": project_path,
+                    "root": "res://",
+                    "include_runtime": True,
+                    "include_addons": False,
+                    "scenario": scenario,
+                    "baseline_run_id": baseline_run_id,
+                    "open": False,
+                    "locale": locale,
+                }
+            )
+            payload = _decode_text_result(mapped)
+            if payload.get("status") != "ok":
+                return _text(payload)
+            selected_run_id = str(payload.get("run_id", ""))
+            if selected_run_id == "":
+                return _text({"status": "error", "message": "failed to create run for live start"})
+
+        result = await visualizer_service.live_start(
+            run_id=selected_run_id,
+            project_path=project_path,
+            port=port,
+            open_browser=open_browser,
+        )
+        return _text(result)
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_live_stop(args: dict) -> list[TextContent]:
+    _ = args
+    try:
+        result = await visualizer_service.live_stop()
+        return _text(result)
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_get_run(args: dict) -> list[TextContent]:
+    project_path = _resolve_project_path(str(args.get("project_path", "")))
+    run_id = str(args.get("run_id", "")).strip()
+    if run_id == "":
+        return _text({"status": "error", "message": "run_id is required"})
+    try:
+        return _text(visualizer_service.get_run(project_path=project_path, run_id=run_id))
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_list_runs(args: dict) -> list[TextContent]:
+    project_path = _resolve_project_path(str(args.get("project_path", "")))
+    scenario = str(args.get("scenario", "")).strip()
+    limit = int(args.get("limit", 30))
+    try:
+        return _text(visualizer_service.list_runs(project_path=project_path, scenario=scenario, limit=limit))
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_diff_runs(args: dict) -> list[TextContent]:
+    project_path = _resolve_project_path(str(args.get("project_path", "")))
+    run_id = str(args.get("run_id", "")).strip()
+    baseline_run_id = str(args.get("baseline_run_id", "")).strip()
+    if run_id == "":
+        return _text({"status": "error", "message": "run_id is required"})
+    if baseline_run_id == "":
+        runs_payload = visualizer_service.list_runs(project_path=project_path, scenario="", limit=200)
+        for item in runs_payload.get("runs", []):
+            if not isinstance(item, dict):
+                continue
+            candidate_run_id = str(item.get("run_id", ""))
+            if candidate_run_id != run_id and str(item.get("result", "")) == "PASS":
+                baseline_run_id = candidate_run_id
+                break
+        if baseline_run_id == "":
+            return _text({"status": "error", "message": "baseline_run_id is required when no prior PASS run exists"})
+    try:
+        diff = visualizer_service.diff_runs(
+            project_path=project_path,
+            run_id=run_id,
+            baseline_run_id=baseline_run_id,
+        )
+        return _text({"status": "ok", **diff})
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_edit_propose(args: dict) -> list[TextContent]:
+    project_path = _resolve_project_path(str(args.get("project_path", "")))
+    file_path = str(args.get("file_path", "")).strip()
+    operation = str(args.get("operation", "")).strip()
+    payload = args.get("payload", {})
+    reason = str(args.get("reason", "")).strip()
+
+    if file_path == "":
+        return _text({"status": "error", "message": "file_path is required"})
+    if operation == "":
+        return _text({"status": "error", "message": "operation is required"})
+    if not isinstance(payload, dict):
+        return _text({"status": "error", "message": "payload must be an object"})
+
+    try:
+        await visualizer_service.publish_event({"type": "tool_event", "event": "start", "tool": "godot_visualizer_edit_propose"})
+        result = visualizer_service.edit_propose(
+            project_path=project_path,
+            file_path=file_path,
+            operation=operation,
+            payload=payload,
+            reason=reason,
+        )
+        await visualizer_service.publish_event(
+            {
+                "type": "edit_event",
+                "event": "propose",
+                "edit_session_id": result.get("edit_session", {}).get("edit_session_id"),
+            }
+        )
+        return _text(result)
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_edit_apply(args: dict) -> list[TextContent]:
+    edit_session_id = str(args.get("edit_session_id", "")).strip()
+    approval_token = str(args.get("approval_token", "")).strip()
+    if edit_session_id == "" or approval_token == "":
+        return _text({"status": "error", "message": "edit_session_id and approval_token are required"})
+    try:
+        result = visualizer_service.edit_apply(edit_session_id=edit_session_id, approval_token=approval_token)
+        await visualizer_service.publish_event({"type": "edit_event", "event": "apply", "edit_session_id": edit_session_id})
+        return _text(result)
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
+
+
+async def _godot_visualizer_edit_cancel(args: dict) -> list[TextContent]:
+    edit_session_id = str(args.get("edit_session_id", "")).strip()
+    if edit_session_id == "":
+        return _text({"status": "error", "message": "edit_session_id is required"})
+    try:
+        result = visualizer_service.edit_cancel(edit_session_id=edit_session_id)
+        await visualizer_service.publish_event({"type": "edit_event", "event": "cancel", "edit_session_id": edit_session_id})
+        return _text(result)
+    except Exception as exc:
+        return _text({"status": "error", "message": str(exc)})
 
 
 def _compile_status(confidence: float, unsupported_count: int) -> str:

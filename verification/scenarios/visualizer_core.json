@@ -1,0 +1,18 @@
+{
+  "name": "visualizer_core",
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "visualizer_contract",
+      "kind": "visualizer_contract",
+      "scenario": "visualizer_core",
+      "locale": "ko",
+      "include_runtime": true,
+      "include_addons": false
+    },
+    {
+      "id": "visualizer_diff_contract",
+      "kind": "visualizer_diff_contract"
+    }
+  ]
+}

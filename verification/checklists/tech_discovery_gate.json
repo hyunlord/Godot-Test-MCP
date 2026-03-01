@@ -1,0 +1,32 @@
+{
+  "name": "tech_discovery_gate",
+  "version": 1,
+  "required_hook_method": "test_mcp_get_tech_probe",
+  "required_hook_return_fields": [
+    "current_tick",
+    "discovery_events",
+    "agent_traits"
+  ],
+  "discovery_event_required_fields": [
+    "tech_id",
+    "tier",
+    "tick",
+    "discoverer_name",
+    "discoverer_id",
+    "toast_shown"
+  ],
+  "agent_trait_required_fields": [
+    "agent_id",
+    "name",
+    "openness"
+  ],
+  "checks": [
+    "tier0_first_by_tick",
+    "tier0_all_by_tick",
+    "tier0_toast_visible",
+    "discoverer_name_recorded",
+    "tier1_start_range",
+    "tier2_after_min_tick",
+    "openness_discovery_trend"
+  ]
+}

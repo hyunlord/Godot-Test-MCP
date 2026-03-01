@@ -1,0 +1,52 @@
+"""Simple i18n helpers for visualizer labels."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+_SUPPORTED: set[str] = {"ko", "en"}
+
+
+_TRANSLATIONS: dict[str, dict[str, str]] = {
+    "en": {
+        "title": "Godot Test MCP Visualizer",
+        "structure_graph": "Structure Graph",
+        "tick_timeline": "Tick Timeline",
+        "causality_chain": "Causality Chain",
+        "diff_panel": "Diff Panel",
+        "detail_inspector": "Detail Inspector",
+        "edit_preview": "Edit Preview",
+        "runtime_source": "Runtime Source",
+        "inferred": "Inferred",
+        "confirmed": "Confirmed",
+    },
+    "ko": {
+        "title": "Godot Test MCP 시각화",
+        "structure_graph": "구조 그래프",
+        "tick_timeline": "틱 타임라인",
+        "causality_chain": "인과 체인",
+        "diff_panel": "비교 패널",
+        "detail_inspector": "상세 인스펙터",
+        "edit_preview": "편집 미리보기",
+        "runtime_source": "런타임 소스",
+        "inferred": "추론",
+        "confirmed": "확정",
+    },
+}
+
+
+def normalize_locale(locale: str) -> str:
+    """Return supported locale code, defaulting to Korean."""
+    normalized = str(locale).strip().lower()
+    return normalized if normalized in _SUPPORTED else "ko"
+
+
+def get_translations(locale: str) -> dict[str, str]:
+    """Return language pack by locale."""
+    return dict(_TRANSLATIONS[normalize_locale(locale)])
+
+
+def build_i18n_payload() -> dict[str, Any]:
+    """Build full i18n payload for browser-side toggle."""
+    return {key: dict(value) for key, value in _TRANSLATIONS.items()}
