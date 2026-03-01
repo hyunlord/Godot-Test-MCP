@@ -93,6 +93,8 @@ class VisualizerRunArtifacts:
     html_path: str
     js_path: str
     css_path: str
+    view_model_path: str = ""
+    offline_html_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,4 +109,6 @@ class VisualizerRunArtifacts:
             "html_path": self.html_path,
             "js_path": self.js_path,
             "css_path": self.css_path,
+            "view_model_path": self.view_model_path,
+            "offline_html_path": self.offline_html_path,
         }

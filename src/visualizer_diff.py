@@ -9,6 +9,39 @@ from typing import Any
 class VisualizerDiffEngine:
     """Compares visualizer runs for structural/runtime deltas."""
 
+    def empty_diff(
+        self,
+        *,
+        run_id: str,
+        baseline_run_id: str = "",
+        warning: str = "baseline_unavailable",
+    ) -> dict[str, Any]:
+        """Return zero-delta diff payload for missing baseline situations."""
+        return {
+            "run_id": run_id,
+            "baseline_run_id": baseline_run_id,
+            "added_nodes": [],
+            "removed_nodes": [],
+            "added_edges": [],
+            "removed_edges": [],
+            "runtime": {
+                "event_distribution_delta": {},
+                "tick_stats": {
+                    "current": {"count": 0.0, "min_tick": 0.0, "max_tick": 0.0, "median_tick": 0.0},
+                    "baseline": {"count": 0.0, "min_tick": 0.0, "max_tick": 0.0, "median_tick": 0.0},
+                },
+                "tick_drift": {"min": 0.0, "max": 0.0, "median": 0.0},
+            },
+            "summary": {
+                "added_node_count": 0,
+                "removed_node_count": 0,
+                "added_edge_count": 0,
+                "removed_edge_count": 0,
+                "event_type_delta_count": 0,
+            },
+            "warnings": [warning],
+        }
+
     def build_diff(
         self,
         *,

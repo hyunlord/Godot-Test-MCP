@@ -20,6 +20,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "runtime_source": "Runtime Source",
         "inferred": "Inferred",
         "confirmed": "Confirmed",
+        "added": "Added",
+        "removed": "Removed",
+        "changed": "Changed",
     },
     "ko": {
         "title": "Godot Test MCP 시각화",
@@ -32,6 +35,9 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "runtime_source": "런타임 소스",
         "inferred": "추론",
         "confirmed": "확정",
+        "added": "추가",
+        "removed": "삭제",
+        "changed": "변경",
     },
 }
 

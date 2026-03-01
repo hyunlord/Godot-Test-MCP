@@ -7,13 +7,15 @@
     "causality.json",
     "diff.json",
     "meta.json",
+    "view_model.json",
     "index.html",
     "app.js",
-    "styles.css"
+    "styles.css",
+    "offline.html"
   ],
   "required_map_keys": ["nodes", "edges", "summary"],
   "required_timeline_keys": ["events", "event_count"],
   "required_causality_keys": ["links"],
   "required_diff_keys": ["summary"],
-  "required_meta_keys": ["run_id", "runtime_source", "locale", "scenario"]
+  "required_meta_keys": ["run_id", "runtime_source", "locale", "scenario", "ui_version", "render_mode", "scale_profile"]
 }

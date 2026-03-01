@@ -7,25 +7,109 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <header>
-      <h1 id="title"></h1>
-      <div class="toolbar">
-        <label for="lang-select">Language</label>
-        <select id="lang-select">
-          <option value="ko">한국어</option>
-          <option value="en">English</option>
-        </select>
-        <span id="runtime-source"></span>
-      </div>
-    </header>
-    <main>
-      <section class="panel"><h2 id="label-structure"></h2><pre id="structure-content"></pre></section>
-      <section class="panel"><h2 id="label-timeline"></h2><pre id="timeline-content"></pre></section>
-      <section class="panel"><h2 id="label-causality"></h2><pre id="causality-content"></pre></section>
-      <section class="panel"><h2 id="label-diff"></h2><pre id="diff-content"></pre></section>
-      <section class="panel"><h2 id="label-inspector"></h2><pre id="inspector-content"></pre></section>
-      <section class="panel"><h2 id="label-edit"></h2><pre id="edit-content"></pre></section>
-    </main>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <h1 id="title">Project Visualizer</h1>
+          <div class="meta-strip">
+            <span class="pill" id="runtime-source">runtime</span>
+            <span class="pill" id="stats-strip">0 nodes</span>
+          </div>
+        </div>
+
+        <div class="controls">
+          <div class="control search-wrap">
+            <input id="search-input" type="search" placeholder="Search nodes, paths, types..." />
+          </div>
+
+          <div class="control">
+            <select id="language-filter"><option value="">All languages</option></select>
+          </div>
+
+          <div class="control">
+            <select id="kind-filter"><option value="">All kinds</option></select>
+          </div>
+
+          <div class="control">
+            <select id="edge-filter"><option value="">All edges</option></select>
+          </div>
+
+          <div class="control toggle-wrap">
+            <label><input id="diff-toggle" type="checkbox" checked /> Diff overlay</label>
+          </div>
+
+          <div class="control">
+            <label for="lang-select">Lang</label>
+            <select id="lang-select">
+              <option value="ko">한국어</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+        </div>
+      </header>
+
+      <main class="main-grid">
+        <section class="graph-panel" id="structure-panel">
+          <div class="panel-title" id="label-structure">Structure Graph</div>
+
+          <div class="graph-stage" id="graph-stage" tabindex="0">
+            <canvas id="edge-canvas"></canvas>
+            <div id="cluster-layer"></div>
+            <div id="node-layer"></div>
+            <div id="selection-layer"></div>
+          </div>
+
+          <div class="legend">
+            <span class="legend-item added">Added</span>
+            <span class="legend-item removed">Removed</span>
+            <span class="legend-item inferred">Inferred</span>
+          </div>
+        </section>
+
+        <aside class="inspector-panel" id="inspector-panel">
+          <div class="panel-title" id="label-inspector">Detail Inspector</div>
+          <div id="inspector-content" class="inspector-body">Select a node to inspect details.</div>
+
+          <div class="panel-title" id="label-edit">Edit Preview</div>
+          <div class="edit-drawer" id="edit-drawer">
+            <div class="edit-hint">Select a node and propose patch operations.</div>
+
+            <label>operation</label>
+            <select id="edit-operation">
+              <option value="replace_text">replace_text</option>
+              <option value="append_text">append_text</option>
+              <option value="set_content">set_content</option>
+            </select>
+
+            <label>payload (JSON)</label>
+            <textarea id="edit-payload" rows="7">{"text":""}</textarea>
+
+            <label>reason</label>
+            <input id="edit-reason" type="text" value="visualizer edit" />
+
+            <div class="edit-buttons">
+              <button id="edit-propose-btn" type="button">Propose</button>
+              <button id="edit-apply-btn" type="button">Apply</button>
+              <button id="edit-cancel-btn" type="button">Cancel</button>
+            </div>
+
+            <div id="edit-status" class="edit-status">No edit session.</div>
+            <pre id="edit-preview" class="edit-preview"></pre>
+          </div>
+        </aside>
+
+        <section class="bottom-panel" id="timeline-panel">
+          <div class="tab-header">
+            <button id="tab-timeline" class="tab active" type="button">Timeline</button>
+            <button id="tab-causality" class="tab" type="button">Causality</button>
+            <button id="tab-diff" class="tab" type="button">Diff</button>
+            <button id="tab-debug" class="tab" type="button">Debug</button>
+          </div>
+          <pre id="bottom-content"></pre>
+        </section>
+      </main>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>

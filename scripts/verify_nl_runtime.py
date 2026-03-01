@@ -1091,9 +1091,11 @@ async def execute_scenario_pack(
                     str(artifacts.get("causality_path", "")),
                     str(artifacts.get("diff_path", "")),
                     str(artifacts.get("meta_path", "")),
+                    str(artifacts.get("view_model_path", "")),
                     str(artifacts.get("html_path", "")),
                     str(artifacts.get("js_path", "")),
                     str(artifacts.get("css_path", "")),
+                    str(artifacts.get("offline_html_path", "")),
                 ]
                 required_paths = [path for path in required_paths if path.strip() != ""]
                 existing_paths, missing_paths = _all_exist(required_paths)
@@ -1102,6 +1104,7 @@ async def execute_scenario_pack(
                 causality_json = {}
                 diff_json = {}
                 meta_json = {}
+                view_model_json = {}
                 try:
                     if str(artifacts.get("map_path", "")).strip() != "":
                         map_json = load_json(Path(str(artifacts.get("map_path"))))
@@ -1113,6 +1116,8 @@ async def execute_scenario_pack(
                         diff_json = load_json(Path(str(artifacts.get("diff_path"))))
                     if str(artifacts.get("meta_path", "")).strip() != "":
                         meta_json = load_json(Path(str(artifacts.get("meta_path"))))
+                    if str(artifacts.get("view_model_path", "")).strip() != "":
+                        view_model_json = load_json(Path(str(artifacts.get("view_model_path"))))
                 except Exception as exc:
                     base["result"] = "FAIL"
                     base["reason"] = f"visualizer artifact parse failed: {exc}"
@@ -1127,6 +1132,8 @@ async def execute_scenario_pack(
                     and "links" in causality_json
                     and "summary" in diff_json
                     and "runtime_source" in meta_json
+                    and "clusters" in view_model_json
+                    and "nodesById" in view_model_json
                 )
                 base["result"] = "PASS" if (len(missing_paths) == 0 and schema_ok) else "FAIL"
                 base["reason"] = "visualizer artifacts validated" if base["result"] == "PASS" else "visualizer contract failed"

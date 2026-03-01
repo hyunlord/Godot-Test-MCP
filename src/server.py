@@ -1419,8 +1419,6 @@ async def _godot_visualizer_diff_runs(args: dict) -> list[TextContent]:
             if candidate_run_id != run_id and str(item.get("result", "")) == "PASS":
                 baseline_run_id = candidate_run_id
                 break
-        if baseline_run_id == "":
-            return _text({"status": "error", "message": "baseline_run_id is required when no prior PASS run exists"})
     try:
         diff = visualizer_service.diff_runs(
             project_path=project_path,

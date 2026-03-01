@@ -58,11 +58,23 @@ class FakeVisualizerClient:
             (base / "timeline.json").write_text(json.dumps({"events": [], "event_count": 0}), encoding="utf-8")
             (base / "causality.json").write_text(json.dumps({"links": []}), encoding="utf-8")
             (base / "diff.json").write_text(json.dumps({"summary": {"added_node_count": 0}}), encoding="utf-8")
-            (base / "meta.json").write_text(json.dumps({"runtime_source": "fallback"}), encoding="utf-8")
+            (base / "meta.json").write_text(
+                json.dumps(
+                    {
+                        "runtime_source": "fallback",
+                        "ui_version": 2,
+                        "render_mode": "canvas_dom_hybrid",
+                        "scale_profile": "large",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (base / "view_model.json").write_text(json.dumps({"clusters": [], "nodesById": {}, "edgesById": {}}), encoding="utf-8")
             (base / "index.html").write_text("<html></html>", encoding="utf-8")
             (base / "app.js").write_text("console.log('x')", encoding="utf-8")
             if not self._missing_css:
                 (base / "styles.css").write_text("body{}", encoding="utf-8")
+            (base / "offline.html").write_text("<html>offline</html>", encoding="utf-8")
 
             return {
                 "status": "ok",
@@ -74,9 +86,11 @@ class FakeVisualizerClient:
                     "causality_path": str(base / "causality.json"),
                     "diff_path": str(base / "diff.json"),
                     "meta_path": str(base / "meta.json"),
+                    "view_model_path": str(base / "view_model.json"),
                     "html_path": str(base / "index.html"),
                     "js_path": str(base / "app.js"),
                     "css_path": str(base / "styles.css"),
+                    "offline_html_path": str(base / "offline.html"),
                 },
             }
         if name == "godot_visualizer_diff_runs":

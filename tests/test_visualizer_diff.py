@@ -25,3 +25,11 @@ def test_diff_engine_detects_changes() -> None:
     assert diff["summary"]["added_node_count"] == 1
     assert diff["summary"]["added_edge_count"] == 1
     assert "spawn" in diff["runtime"]["event_distribution_delta"]
+
+
+def test_diff_engine_empty_diff_warning() -> None:
+    engine = VisualizerDiffEngine()
+    diff = engine.empty_diff(run_id="run-x", warning="baseline_unavailable")
+    assert diff["run_id"] == "run-x"
+    assert diff["summary"]["added_node_count"] == 0
+    assert diff["warnings"] == ["baseline_unavailable"]

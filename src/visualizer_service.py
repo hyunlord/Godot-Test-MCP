@@ -91,6 +91,10 @@ class VisualizerService:
                 "runtime_node_count": len(runtime_nodes),
             },
         ).to_dict()
+        map_payload["summary"] = {
+            **map_payload.get("summary", {}),
+            **self._extended_summary(map_payload),
+        }
 
         selected_baseline = baseline_run_id.strip() or self._select_baseline_run_id(
             project_path=project,
@@ -106,18 +110,7 @@ class VisualizerService:
                 current_timeline=timeline,
             )
         else:
-            diff_payload = {
-                "run_id": run_id,
-                "baseline_run_id": "",
-                "summary": {
-                    "added_node_count": 0,
-                    "removed_node_count": 0,
-                    "added_edge_count": 0,
-                    "removed_edge_count": 0,
-                    "event_type_delta_count": 0,
-                },
-                "note": "baseline unavailable",
-            }
+            diff_payload = self._diff_engine.empty_diff(run_id=run_id, warning="baseline_unavailable")
 
         meta = {
             "version": 1,
@@ -130,6 +123,10 @@ class VisualizerService:
             "baseline_run_id": selected_baseline,
             "result": "PASS",
             "raw_probe": raw_probe,
+            "ui_version": 2,
+            "render_mode": "canvas_dom_hybrid",
+            "scale_profile": "large",
+            "warnings": diff_payload.get("warnings", []),
         }
 
         artifacts = self._renderer.write_bundle(
@@ -211,6 +208,7 @@ class VisualizerService:
         causality_payload = _load("causality.json")
         diff_payload = _load("diff.json")
         meta_payload = _load("meta.json")
+        view_model_payload = _load("view_model.json")
 
         return {
             "status": "ok",
@@ -220,6 +218,7 @@ class VisualizerService:
             "causality": causality_payload,
             "diff": diff_payload,
             "meta": meta_payload,
+            "view_model": view_model_payload,
         }
 
     def list_runs(self, *, project_path: str, scenario: str, limit: int = 30) -> dict[str, Any]:
@@ -273,6 +272,15 @@ class VisualizerService:
         if current_timeline is None:
             current_timeline = self._load_json(run_dir / "timeline.json")
 
+        if baseline_run_id.strip() == "":
+            return self._diff_engine.empty_diff(run_id=run_id, warning="baseline_unavailable")
+        if not baseline_dir.exists():
+            return self._diff_engine.empty_diff(
+                run_id=run_id,
+                baseline_run_id=baseline_run_id,
+                warning="baseline_not_found",
+            )
+
         baseline_map = self._load_json(baseline_dir / "map.json")
         baseline_timeline = self._load_json(baseline_dir / "timeline.json")
 
@@ -289,6 +297,37 @@ class VisualizerService:
             (run_dir / "diff.json").write_text(json.dumps(diff, indent=2, ensure_ascii=False), encoding="utf-8")
 
         return diff
+
+    def _extended_summary(self, map_payload: dict[str, Any]) -> dict[str, Any]:
+        nodes = map_payload.get("nodes", []) if isinstance(map_payload.get("nodes", []), list) else []
+        edges = map_payload.get("edges", []) if isinstance(map_payload.get("edges", []), list) else []
+        node_count = max(1, len(nodes))
+        edge_count = len(edges)
+
+        node_kind_counts: dict[str, int] = {}
+        edge_type_counts: dict[str, int] = {}
+        clusters: set[str] = set()
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            kind = str(node.get("kind", "unknown"))
+            node_kind_counts[kind] = int(node_kind_counts.get(kind, 0)) + 1
+            category = str(node.get("folder_category", "misc")).strip().lower() or "misc"
+            clusters.add(category)
+
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            edge_type = str(edge.get("edge_type", "unknown"))
+            edge_type_counts[edge_type] = int(edge_type_counts.get(edge_type, 0)) + 1
+
+        return {
+            "cluster_count": len(clusters),
+            "graph_density": float(edge_count) / float(node_count * max(1, node_count - 1)),
+            "node_kind_counts": node_kind_counts,
+            "edge_type_counts": edge_type_counts,
+        }
 
     def edit_propose(
         self,

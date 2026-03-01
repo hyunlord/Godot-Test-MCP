@@ -63,3 +63,21 @@ class TestVisualizerToolRouting:
             payload = _decode(result)
             assert payload["status"] == "proposed"
             assert mock_propose.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_diff_runs_without_baseline_returns_ok(self) -> None:
+        with (
+            patch("src.server.visualizer_service.list_runs") as mock_list,
+            patch("src.server.visualizer_service.diff_runs") as mock_diff,
+        ):
+            mock_list.return_value = {"status": "ok", "runs": [], "total": 0}
+            mock_diff.return_value = {
+                "run_id": "r1",
+                "baseline_run_id": "",
+                "summary": {"added_node_count": 0},
+                "warnings": ["baseline_unavailable"],
+            }
+            result = await handle_call_tool("godot_visualizer_diff_runs", {"project_path": "/tmp/project", "run_id": "r1"})
+            payload = _decode(result)
+            assert payload["status"] == "ok"
+            assert payload["warnings"] == ["baseline_unavailable"]
