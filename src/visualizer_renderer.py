@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .visualizer_i18n import build_i18n_payload
 from .visualizer_schema import VisualizerRunArtifacts
 from .visualizer_view_model import VisualizerViewModelBuilder
 
@@ -68,7 +69,16 @@ class VisualizerRenderer:
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         view_model_path.write_text(json.dumps(view_model, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        self._copy_web_assets(visualizer_dir=visualizer_dir)
+        inline_data = {
+            "i18n": build_i18n_payload(),
+            "meta": meta,
+            "map": map_payload,
+            "timeline": timeline_payload,
+            "causality": causality_payload,
+            "diff": diff_payload,
+            "view_model": view_model,
+        }
+        self._copy_web_assets(visualizer_dir=visualizer_dir, inline_data=inline_data)
         offline_html_path.write_text(
             self._build_offline_html(
                 map_payload=map_payload,
@@ -97,17 +107,22 @@ class VisualizerRenderer:
             offline_html_path=str(offline_html_path),
         )
 
-    def _copy_web_assets(self, *, visualizer_dir: Path) -> None:
+    def _copy_web_assets(self, *, visualizer_dir: Path, inline_data: dict[str, Any]) -> None:
         web_dir = Path(__file__).resolve().parent / "visualizer_web"
         required = ["index.html", "app.js", "styles.css", "i18n.json"]
         missing = [name for name in required if not (web_dir / name).is_file()]
         if missing:
             raise ValueError(f"visualizer_web assets missing: {missing}")
 
-        for name in required:
+        for name in ["app.js", "styles.css", "i18n.json"]:
             src = web_dir / name
             dst = visualizer_dir / name
             dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+        index_template = (web_dir / "index.html").read_text(encoding="utf-8")
+        inline_json = json.dumps(inline_data, ensure_ascii=False).replace("</", "<\\/")
+        index_html = index_template.replace("__VISUALIZER_INLINE_DATA__", inline_json)
+        (visualizer_dir / "index.html").write_text(index_html, encoding="utf-8")
 
     def _build_offline_html(
         self,

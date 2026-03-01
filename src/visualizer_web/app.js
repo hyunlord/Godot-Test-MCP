@@ -16,18 +16,38 @@
     edgeFilter: '',
     diffOverlay: true,
     transform: { x: 32, y: 24, scale: 0.72 },
+    userAdjustedView: false,
     drag: { active: false, sx: 0, sy: 0, ox: 0, oy: 0 },
     editSession: null,
   };
 
   const $ = (id) => document.getElementById(id);
 
-  const loadJson = async (path) => {
-    const res = await fetch(path);
-    if (!res.ok) {
-      throw new Error(`Failed to load ${path}: ${res.status}`);
+  const readInlineData = () => {
+    const el = $('visualizer-inline-data');
+    if (!el || !el.textContent) return {};
+    try {
+      return JSON.parse(el.textContent);
+    } catch (_) {
+      return {};
     }
-    return await res.json();
+  };
+
+  const inlineData = readInlineData();
+
+  const loadJson = async (path, fallbackKey = '') => {
+    try {
+      const res = await fetch(path);
+      if (!res.ok) {
+        throw new Error(`Failed to load ${path}: ${res.status}`);
+      }
+      return await res.json();
+    } catch (err) {
+      if (fallbackKey && typeof inlineData === 'object' && inlineData !== null && fallbackKey in inlineData) {
+        return inlineData[fallbackKey];
+      }
+      throw err;
+    }
   };
 
   const t = (key) => {
@@ -36,6 +56,7 @@
   };
 
   const fmt = (value) => JSON.stringify(value, null, 2);
+  const clamp = (value, minValue, maxValue) => Math.max(minValue, Math.min(maxValue, value));
 
   const maxDomNodes = (zoom) => {
     if (zoom < 0.35) return 700;
@@ -187,6 +208,67 @@
     $('label-structure').textContent = t('structure_graph');
     $('label-inspector').textContent = t('detail_inspector');
     $('label-edit').textContent = t('edit_preview');
+    $('label-diff-toggle').textContent = t('diff_overlay');
+    $('label-lang').textContent = t('lang');
+    $('legend-added').textContent = t('added');
+    $('legend-removed').textContent = t('removed');
+    $('legend-inferred').textContent = t('inferred');
+    $('tab-timeline').textContent = t('timeline_tab');
+    $('tab-causality').textContent = t('causality_tab');
+    $('tab-diff').textContent = t('diff_tab');
+    $('tab-debug').textContent = t('debug_tab');
+    $('edit-hint').textContent = t('edit_hint');
+    $('edit-label-operation').textContent = t('operation');
+    $('edit-label-payload').textContent = t('payload_json');
+    $('edit-label-reason').textContent = t('reason');
+    $('edit-propose-btn').textContent = t('propose');
+    $('edit-apply-btn').textContent = t('apply');
+    $('edit-cancel-btn').textContent = t('cancel');
+    $('search-input').setAttribute('placeholder', t('search_placeholder'));
+    $('runtime-source').textContent = `${t('runtime_source')}: ${state.meta.runtime_source || 'unknown'}`;
+    renderRuntimeWarningBanner();
+  };
+
+  const diagnosticsList = () => {
+    if (!Array.isArray(state.meta?.runtime_diagnostics)) return [];
+    return state.meta.runtime_diagnostics.filter((item) => item && typeof item === 'object');
+  };
+
+  const diagnosticHint = (diagnostic) => {
+    const code = String(diagnostic?.code || '').trim();
+    if (code) {
+      const key = `diagnostic_hint_${code}`;
+      const translated = t(key);
+      if (translated !== key) return translated;
+    }
+    if (String(diagnostic?.level || '') === 'warning') {
+      return t('diagnostic_hint_runtime_warning_generic');
+    }
+    if (diagnostic?.hint) return String(diagnostic.hint);
+    return t('diagnostic_hint_runtime_error_generic');
+  };
+
+  const renderRuntimeWarningBanner = () => {
+    const banner = $('runtime-warning-banner');
+    if (!banner) return;
+
+    const diagnostics = diagnosticsList();
+    if (diagnostics.length === 0) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    const primary = diagnostics.find((item) => String(item.level || '') === 'error') || diagnostics[0];
+    const source = String(primary.source || '').trim();
+    const line = Number(primary.line);
+    const location = [];
+    if (source) location.push(`${t('runtime_diagnostics_source')}: ${source}`);
+    if (Number.isFinite(line) && line >= 0) location.push(`${t('runtime_diagnostics_line')}: ${line}`);
+
+    $('runtime-warning-title').textContent = `${t('runtime_diagnostics_title')} (${diagnostics.length} ${t('runtime_diagnostics_count')})`;
+    $('runtime-warning-message').textContent = [String(primary.message || ''), location.join(' · ')].filter(Boolean).join('\n');
+    $('runtime-warning-hint').textContent = `${t('runtime_diagnostics_hint')}: ${diagnosticHint(primary)}`;
+    banner.classList.remove('hidden');
   };
 
   const allNodes = () => Object.values(state.viewModel?.nodesById || {});
@@ -393,7 +475,7 @@
   const renderInspector = () => {
     const selected = state.selectedNodeId;
     if (!selected || !state.viewModel.nodesById[selected]) {
-      $('inspector-content').textContent = 'Select a node to inspect details.';
+      $('inspector-content').textContent = t('select_node_hint');
       return;
     }
 
@@ -457,7 +539,61 @@
     $('stats-strip').textContent = `${stats.node_count || 0} nodes · ${stats.edge_count || 0} edges · ${stats.cluster_count || 0} clusters`;
   };
 
-  const fitSelected = () => {
+  const graphBounds = () => {
+    const clusters = Array.isArray(state.viewModel?.clusters) ? state.viewModel.clusters : [];
+    if (clusters.length > 0) {
+      const minX = Math.min(...clusters.map((cluster) => Number(cluster.x || 0)));
+      const minY = Math.min(...clusters.map((cluster) => Number(cluster.y || 0)));
+      const maxX = Math.max(...clusters.map((cluster) => Number(cluster.x || 0) + Number(cluster.w || 0)));
+      const maxY = Math.max(...clusters.map((cluster) => Number(cluster.y || 0) + Number(cluster.h || 0)));
+      return {
+        minX,
+        minY,
+        width: Math.max(1, maxX - minX),
+        height: Math.max(1, maxY - minY),
+      };
+    }
+
+    const nodes = allNodes();
+    if (nodes.length > 0) {
+      const xs = nodes.map((node) => Number(node.layout?.x || 0));
+      const ys = nodes.map((node) => Number(node.layout?.y || 0));
+      const x2 = nodes.map((node) => Number(node.layout?.x || 0) + Number(node.layout?.w || 0));
+      const y2 = nodes.map((node) => Number(node.layout?.y || 0) + Number(node.layout?.h || 0));
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      const maxX = Math.max(...x2);
+      const maxY = Math.max(...y2);
+      return {
+        minX,
+        minY,
+        width: Math.max(1, maxX - minX),
+        height: Math.max(1, maxY - minY),
+      };
+    }
+
+    return { minX: 0, minY: 0, width: 1600, height: 1000 };
+  };
+
+  const fitGraphToView = ({ renderNow = true, markInteracted = false } = {}) => {
+    if (!state.viewModel) return;
+    const stage = $('graph-stage').getBoundingClientRect();
+    if (stage.width <= 0 || stage.height <= 0) return;
+
+    const bounds = graphBounds();
+    const padding = 36;
+    const targetW = Math.max(1, stage.width - padding * 2);
+    const targetH = Math.max(1, stage.height - padding * 2);
+    const nextScale = clamp(Math.min(targetW / bounds.width, targetH / bounds.height), 0.2, 1.8);
+
+    state.transform.scale = nextScale;
+    state.transform.x = stage.width / 2 - (bounds.minX + bounds.width / 2) * nextScale;
+    state.transform.y = stage.height / 2 - (bounds.minY + bounds.height / 2) * nextScale;
+    if (markInteracted) state.userAdjustedView = true;
+    if (renderNow) render();
+  };
+
+  const fitSelected = ({ markInteracted = true } = {}) => {
     const id = state.selectedNodeId;
     if (!id) return;
     const node = state.viewModel?.nodesById?.[id];
@@ -465,21 +601,27 @@
 
     const stage = $('graph-stage').getBoundingClientRect();
     const l = node.layout;
-    state.transform.scale = Math.max(0.45, Math.min(1.5, state.transform.scale));
+    state.transform.scale = clamp(state.transform.scale, 0.45, 1.5);
     state.transform.x = stage.width / 2 - (l.x + l.w / 2) * state.transform.scale;
     state.transform.y = stage.height / 2 - (l.y + l.h / 2) * state.transform.scale;
+    if (markInteracted) state.userAdjustedView = true;
     render();
   };
 
   const setupFilters = () => {
-    const setOptions = (el, values, label) => {
-      el.innerHTML = `<option value="">All ${label}</option>` + values.map((v) => `<option value="${v}">${v}</option>`).join('');
+    const setOptions = (el, values, labelKey, selectedValue) => {
+      const options = [`<option value="">${t(labelKey)}</option>`];
+      values.forEach((v) => {
+        const selected = selectedValue === v ? ' selected' : '';
+        options.push(`<option value="${v}"${selected}>${v}</option>`);
+      });
+      el.innerHTML = options.join('');
     };
 
     const filters = state.viewModel.filters || {};
-    setOptions($('language-filter'), filters.languages || [], 'languages');
-    setOptions($('kind-filter'), filters.kinds || [], 'kinds');
-    setOptions($('edge-filter'), filters.edge_types || [], 'edges');
+    setOptions($('language-filter'), filters.languages || [], 'all_languages', state.languageFilter);
+    setOptions($('kind-filter'), filters.kinds || [], 'all_kinds', state.kindFilter);
+    setOptions($('edge-filter'), filters.edge_types || [], 'all_edges', state.edgeFilter);
   };
 
   const apiToolCall = async (tool, args) => {
@@ -592,6 +734,7 @@
     $('lang-select').addEventListener('change', (ev) => {
       state.locale = String(ev.target.value || 'ko');
       applyI18n();
+      setupFilters();
       render();
     });
 
@@ -615,6 +758,7 @@
       state.drag.sy = ev.clientY;
       state.drag.ox = state.transform.x;
       state.drag.oy = state.transform.y;
+      state.userAdjustedView = true;
     });
 
     window.addEventListener('mousemove', (ev) => {
@@ -633,7 +777,7 @@
       ev.preventDefault();
       const delta = ev.deltaY < 0 ? 1.08 : 0.92;
       const old = state.transform.scale;
-      const next = Math.max(0.2, Math.min(2.0, old * delta));
+      const next = clamp(old * delta, 0.2, 2.0);
 
       const rect = stage.getBoundingClientRect();
       const cx = ev.clientX - rect.left;
@@ -644,6 +788,7 @@
       state.transform.scale = next;
       state.transform.x = cx - wx * next;
       state.transform.y = cy - wy * next;
+      state.userAdjustedView = true;
       render();
     }, { passive: false });
 
@@ -657,22 +802,32 @@
         render();
       }
       if (ev.key.toLowerCase() === 'f') {
-        fitSelected();
+        if (state.selectedNodeId) {
+          fitSelected({ markInteracted: true });
+        } else {
+          fitGraphToView({ renderNow: true, markInteracted: true });
+        }
       }
     });
 
-    window.addEventListener('resize', () => render());
+    window.addEventListener('resize', () => {
+      if (!state.userAdjustedView) {
+        fitGraphToView({ renderNow: true, markInteracted: false });
+        return;
+      }
+      render();
+    });
   };
 
   const bootstrap = async () => {
-    state.i18n = await loadJson('i18n.json');
-    state.meta = await loadJson('meta.json');
+    state.i18n = await loadJson('i18n.json', 'i18n');
+    state.meta = await loadJson('meta.json', 'meta');
 
     const [map, timeline, causality, diff] = await Promise.all([
-      loadJson('map.json'),
-      loadJson('timeline.json'),
-      loadJson('causality.json'),
-      loadJson('diff.json'),
+      loadJson('map.json', 'map'),
+      loadJson('timeline.json', 'timeline'),
+      loadJson('causality.json', 'causality'),
+      loadJson('diff.json', 'diff'),
     ]);
 
     state.map = map;
@@ -681,7 +836,7 @@
     state.diff = diff;
 
     try {
-      state.viewModel = await loadJson('view_model.json');
+      state.viewModel = await loadJson('view_model.json', 'view_model');
     } catch (_) {
       state.viewModel = fallbackViewModel(map, timeline, causality, diff);
     }
@@ -689,12 +844,11 @@
     state.locale = state.meta.locale || 'ko';
     $('lang-select').value = state.locale;
 
-    $('runtime-source').textContent = `${t('runtime_source')}: ${state.meta.runtime_source || 'unknown'}`;
-
     applyI18n();
     setupFilters();
     setupEvents();
     setupEditDrawer();
+    fitGraphToView({ renderNow: false, markInteracted: false });
     render();
   };
 
@@ -702,7 +856,7 @@
     console.error('Visualizer bootstrap failed', err);
     const el = $('inspector-content');
     if (el) {
-      el.textContent = `Visualizer bootstrap failed:\n${String(err)}`;
+      el.textContent = `Visualizer bootstrap failed:\n${String(err)}\n\nOpen offline.html when file protocol blocks fetch.`;
     }
   });
 })();

@@ -30,11 +30,17 @@ class TestVisualizerToolRouting:
     @pytest.mark.asyncio
     async def test_map_project_routes_to_service(self) -> None:
         with patch("src.server.visualizer_service.map_project", new_callable=AsyncMock) as mock_map:
-            mock_map.return_value = {"status": "ok", "run_id": "r1"}
+            mock_map.return_value = {
+                "status": "ok",
+                "run_id": "r1",
+                "summary": {"runtime_error_count": 1, "runtime_warning_count": 0},
+            }
             result = await handle_call_tool("godot_visualizer_map_project", {"project_path": "/tmp/project"})
             payload = _decode(result)
             assert payload["status"] == "ok"
             assert payload["run_id"] == "r1"
+            assert payload["summary"]["runtime_error_count"] == 1
+            assert payload["summary"]["runtime_warning_count"] == 0
             assert mock_map.await_count == 1
 
     @pytest.mark.asyncio

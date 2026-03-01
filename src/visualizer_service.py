@@ -64,6 +64,7 @@ class VisualizerService:
         timeline: dict[str, Any] = {"current_tick": -1, "events": [], "event_count": 0}
         causality: dict[str, Any] = {"links": [], "confirmed_count": 0, "inferred_count": 0}
         raw_probe: dict[str, Any] = {}
+        runtime_diagnostics: list[dict[str, Any]] = []
 
         if include_runtime:
             runtime = await self._runtime_mapper.collect(
@@ -77,6 +78,14 @@ class VisualizerService:
             timeline = runtime.timeline
             causality = runtime.causality
             raw_probe = runtime.raw_probe
+            runtime_diagnostics = runtime.runtime_diagnostics
+
+        runtime_error_count = sum(
+            1 for item in runtime_diagnostics if isinstance(item, dict) and str(item.get("level", "")) == "error"
+        )
+        runtime_warning_count = sum(
+            1 for item in runtime_diagnostics if isinstance(item, dict) and str(item.get("level", "")) == "warning"
+        )
 
         map_payload = VisualizerMap(
             run_id=run_id,
@@ -89,6 +98,8 @@ class VisualizerService:
                 **static.get("summary", {}),
                 "runtime_source": runtime_source,
                 "runtime_node_count": len(runtime_nodes),
+                "runtime_error_count": runtime_error_count,
+                "runtime_warning_count": runtime_warning_count,
             },
         ).to_dict()
         map_payload["summary"] = {
@@ -127,6 +138,7 @@ class VisualizerService:
             "render_mode": "canvas_dom_hybrid",
             "scale_profile": "large",
             "warnings": diff_payload.get("warnings", []),
+            "runtime_diagnostics": runtime_diagnostics,
         }
 
         artifacts = self._renderer.write_bundle(

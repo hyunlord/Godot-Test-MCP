@@ -21,3 +21,16 @@ def test_build_i18n_payload_contains_two_languages() -> None:
     payload = build_i18n_payload()
     assert "ko" in payload
     assert "en" in payload
+
+
+def test_diagnostic_banner_keys_exist_for_both_locales() -> None:
+    payload = build_i18n_payload()
+    required = [
+        "runtime_diagnostics_title",
+        "runtime_diagnostics_hint",
+        "diagnostic_hint_autoload_singleton_collision",
+        "diagnostic_hint_script_parse_error",
+    ]
+    for locale in ["ko", "en"]:
+        for key in required:
+            assert key in payload[locale]

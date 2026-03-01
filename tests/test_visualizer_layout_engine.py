@@ -28,3 +28,23 @@ def test_layout_engine_builds_clusters_and_edges() -> None:
     first = payload["edge_layouts"][0]
     assert "points" in first
     assert "sx" in first["points"]
+
+
+def test_layout_engine_normalizes_cluster_origin_and_keeps_relative_node_spacing() -> None:
+    engine = VisualizerLayoutEngine()
+    nodes = [
+        {"id": "func::1", "label": "f1", "kind": "function", "folder_category": "ai"},
+        {"id": "func::2", "label": "f2", "kind": "function", "folder_category": "ai"},
+    ]
+
+    payload = engine.build(nodes=nodes, edges=[])
+
+    clusters = payload["clusters"]
+    assert len(clusters) == 1
+    cluster = clusters[0]
+    assert cluster["y"] == 40.0
+
+    positions = payload["node_positions"]
+    dx = positions["func::2"]["x"] - positions["func::1"]["x"]
+    assert dx > 0
+    assert positions["func::1"]["y"] == positions["func::2"]["y"]

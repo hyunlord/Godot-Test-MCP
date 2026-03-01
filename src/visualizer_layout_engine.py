@@ -40,6 +40,7 @@ class VisualizerLayoutEngine:
     ) -> dict[str, Any]:
         clusters = self._cluster_nodes(nodes)
         cluster_layout = self._layout_clusters(clusters)
+        cluster_layout = self._normalize_coordinates(cluster_layout)
 
         node_positions: dict[str, dict[str, float]] = {}
         for cluster in cluster_layout:
@@ -161,6 +162,46 @@ class VisualizerLayoutEngine:
             band_row_h[band] = max(band_row_h[band], height)
 
         return laid_out
+
+    def _normalize_coordinates(
+        self,
+        clusters: list[dict[str, Any]],
+        *,
+        target_min_x: float = 40.0,
+        target_min_y: float = 40.0,
+    ) -> list[dict[str, Any]]:
+        if len(clusters) == 0:
+            return clusters
+
+        min_x = min(float(cluster.get("x", 0.0)) for cluster in clusters)
+        min_y = min(float(cluster.get("y", 0.0)) for cluster in clusters)
+        shift_x = target_min_x - min_x
+        shift_y = target_min_y - min_y
+
+        if shift_x == 0.0 and shift_y == 0.0:
+            return clusters
+
+        normalized: list[dict[str, Any]] = []
+        for cluster in clusters:
+            moved_nodes: list[dict[str, Any]] = []
+            for node in cluster.get("nodes", []):
+                moved_nodes.append(
+                    {
+                        **node,
+                        "x": float(node.get("x", 0.0)) + shift_x,
+                        "y": float(node.get("y", 0.0)) + shift_y,
+                    }
+                )
+
+            normalized.append(
+                {
+                    **cluster,
+                    "x": float(cluster.get("x", 0.0)) + shift_x,
+                    "y": float(cluster.get("y", 0.0)) + shift_y,
+                    "nodes": moved_nodes,
+                }
+            )
+        return normalized
 
     def _layout_edges(
         self,

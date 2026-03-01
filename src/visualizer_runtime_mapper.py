@@ -22,6 +22,7 @@ class RuntimeMapResult:
     timeline: dict[str, Any]
     causality: dict[str, Any]
     raw_probe: dict[str, Any]
+    runtime_diagnostics: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -31,6 +32,7 @@ class RuntimeMapResult:
             "timeline": self.timeline,
             "causality": self.causality,
             "raw_probe": self.raw_probe,
+            "runtime_diagnostics": self.runtime_diagnostics,
         }
 
 
@@ -76,6 +78,7 @@ class VisualizerRuntimeMapper:
                     timeline=runtime["timeline"],
                     causality=runtime["causality"],
                     raw_probe=probe,
+                    runtime_diagnostics=runtime.get("runtime_diagnostics", []),
                 )
 
         fallback = await self._fallback(ws_command=ws_command, read_errors=read_errors)
@@ -86,6 +89,7 @@ class VisualizerRuntimeMapper:
             timeline=fallback["timeline"],
             causality=fallback["causality"],
             raw_probe=fallback["raw_probe"],
+            runtime_diagnostics=fallback["runtime_diagnostics"],
         )
 
     def _from_probe(self, probe: dict[str, Any]) -> dict[str, Any]:
@@ -210,12 +214,16 @@ class VisualizerRuntimeMapper:
             "confirmed_count": sum(1 for edge in edges if edge.edge_type == "causes"),
             "inferred_count": sum(1 for edge in edges if edge.edge_type == "causes_inferred"),
         }
+        runtime_diagnostics = probe.get("runtime_diagnostics", [])
+        if not isinstance(runtime_diagnostics, list):
+            runtime_diagnostics = []
 
         return {
             "nodes": nodes,
             "edges": edges,
             "timeline": timeline,
             "causality": causality,
+            "runtime_diagnostics": [item for item in runtime_diagnostics if isinstance(item, dict)],
         }
 
     async def _fallback(self, *, ws_command: WSCallable, read_errors: ErrorCallable) -> dict[str, Any]:
@@ -225,7 +233,7 @@ class VisualizerRuntimeMapper:
         tree = await ws_command("get_tree_info", {})
         snapshot = await ws_command("get_visual_snapshot", {"max_nodes": 300})
         capabilities = await ws_command("get_capabilities", {})
-        errors = read_errors()
+        error_payload = read_errors()
 
         root_children = tree.get("root_children", []) if isinstance(tree, dict) else []
         for child in root_children if isinstance(root_children, list) else []:
@@ -269,7 +277,7 @@ class VisualizerRuntimeMapper:
                 )
             )
 
-        for error_idx, error in enumerate(errors.get("errors", [])):
+        for error_idx, error in enumerate(error_payload.get("errors", [])):
             if not isinstance(error, dict):
                 continue
             node_id = f"fallback::error::{error_idx}"
@@ -286,8 +294,25 @@ class VisualizerRuntimeMapper:
                 )
             )
 
+        for warning_idx, warning in enumerate(error_payload.get("warnings", [])):
+            if not isinstance(warning, dict):
+                continue
+            node_id = f"fallback::warning::{warning_idx}"
+            nodes.append(
+                VisualizerNode(
+                    id=node_id,
+                    kind="warning",
+                    label=str(warning.get("category", "WARNING")),
+                    path=str(warning.get("source", "")),
+                    language="runtime",
+                    folder_category="runtime",
+                    loc=1,
+                    metadata=warning,
+                )
+            )
+
         timeline_events: list[dict[str, Any]] = []
-        for idx, error in enumerate(errors.get("errors", [])):
+        for idx, error in enumerate(error_payload.get("errors", [])):
             if not isinstance(error, dict):
                 continue
             timeline_events.append(
@@ -298,6 +323,19 @@ class VisualizerRuntimeMapper:
                     "payload": error,
                 }
             )
+        for idx, warning in enumerate(error_payload.get("warnings", [])):
+            if not isinstance(warning, dict):
+                continue
+            timeline_events.append(
+                {
+                    "id": f"fallback_warning_{idx}",
+                    "tick": len(timeline_events),
+                    "type": "warning",
+                    "payload": warning,
+                }
+            )
+
+        runtime_diagnostics = self._normalize_runtime_diagnostics(error_payload=error_payload)
 
         timeline = {
             "current_tick": -1,
@@ -323,8 +361,9 @@ class VisualizerRuntimeMapper:
                 "tree": tree,
                 "snapshot": snapshot,
                 "capabilities": capabilities,
-                "errors": errors,
+                "errors": error_payload,
             },
+            "runtime_diagnostics": runtime_diagnostics,
         }
 
     def _infer_causality(self, events: list[dict[str, Any]]) -> list[VisualizerEdge]:
@@ -360,3 +399,43 @@ class VisualizerRuntimeMapper:
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    def _normalize_runtime_diagnostics(self, *, error_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        diagnostics: list[dict[str, Any]] = []
+        for level in ["errors", "warnings"]:
+            items = error_payload.get(level, [])
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                normalized_level = "warning" if level == "warnings" else "error"
+                message = str(item.get("message", ""))
+                code, hint = self._classify_diagnostic(message=message, level=normalized_level)
+                diagnostics.append(
+                    {
+                        "level": normalized_level,
+                        "code": code,
+                        "message": message,
+                        "source": str(item.get("source", "")),
+                        "line": self._to_int(item.get("line"), default=-1),
+                        "hint": hint,
+                    }
+                )
+        return diagnostics
+
+    def _classify_diagnostic(self, *, message: str, level: str) -> tuple[str, str]:
+        lowered = message.lower()
+        if "hides an autoload singleton" in lowered:
+            return (
+                "autoload_singleton_collision",
+                "Autoload singleton name collides with class_name. Rename one side to resolve.",
+            )
+        if "parse error" in lowered:
+            return (
+                "script_parse_error",
+                "Script parse error detected. Fix syntax or symbol conflicts in the referenced script.",
+            )
+        if level == "warning":
+            return ("runtime_warning_generic", "Runtime warning was reported by Godot.")
+        return ("runtime_error_generic", "Runtime error was reported by Godot.")
