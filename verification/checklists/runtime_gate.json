@@ -1,0 +1,16 @@
+{
+  "name": "runtime_gate",
+  "version": 1,
+  "policy": {
+    "strict_pass_only": true,
+    "fail_on_results": ["FAIL", "UNDETERMINED", "ERROR"],
+    "success_on_results": ["PASS"]
+  },
+  "required_report_fields": [
+    "summary",
+    "contract_checks",
+    "scenario_results",
+    "artifacts_index",
+    "exit_code"
+  ]
+}

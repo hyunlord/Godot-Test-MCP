@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -13,12 +14,16 @@ from mcp.types import TextContent, Tool
 from .config import Config
 from .godot_process import GodotProcessManager
 from .injector import HarnessInjector
+from .nl_compiler import NLTestCompiler
+from .nl_executor import NLExecutionContext, NLTestExecutor
 from .ws_client import GodotWebSocketClient
 
 server = Server("godot-test-mcp")
 manager: GodotProcessManager
 injector: HarnessInjector | None = None
 ws_client: GodotWebSocketClient = GodotWebSocketClient()
+nl_compiler: NLTestCompiler = NLTestCompiler()
+nl_executor: NLTestExecutor = NLTestExecutor()
 
 
 def _text(data: dict) -> list[TextContent]:
@@ -217,12 +222,12 @@ TOOLS = [
     Tool(
         name="godot_get_node",
         description=(
-            "Get node info + all script variables at a given path. Requires test harness.\n\n"
+            "Get node info + runtime-visible properties at a given path. Requires test harness.\n\n"
             "Example:\n"
             "  path: '/root/Main'\n"
             "  → {path: '/root/Main', class: 'Node2D', name: 'Main', "
             "properties: {score: 100, lives: 3}}\n\n"
-            "USE THIS to read all script variables on a specific node. "
+            "USE THIS to read runtime properties on a specific node (language-agnostic). "
             "USE godot_inspect for deeper introspection (methods, signals, children)."
         ),
         inputSchema={
@@ -374,7 +379,8 @@ TOOLS = [
         name="godot_eval",
         description=(
             "Evaluate a single GDScript expression in the running game. Requires test harness. "
-            "Single expression only — no var, no loops, no multi-line.\n\n"
+            "Single expression only — no var, no loops, no multi-line. "
+            "Legacy/optional helper (not required by natural-language automation).\n\n"
             "Example 1 — Read a property:\n"
             "  expression: \"get_node('Main').score\"\n"
             "  → {value: 100}\n\n"
@@ -444,7 +450,8 @@ TOOLS = [
         name="godot_run_script",
         description=(
             "Execute multi-line GDScript code in the running game. Supports var declarations, "
-            "loops, conditionals — anything GDScript can do. Returns the value from 'return' statement.\n\n"
+            "loops, conditionals — anything GDScript can do. Returns the value from 'return' statement. "
+            "Legacy/optional helper (not required by natural-language automation).\n\n"
             "Example 1 — Collect all agent health values:\n"
             "  code: \"var em = get_tree().root.get_node('Main').entity_manager\\n"
             "var results = []\\n"
@@ -510,6 +517,84 @@ TOOLS = [
             "required": ["expressions"],
         },
     ),
+    Tool(
+        name="godot_get_nl_capabilities",
+        description=(
+            "Get language-agnostic testing capabilities discovered from the running project.\n\n"
+            "Example:\n"
+            "  → {status: 'ok', nodes: [...], groups: [...], hook_methods: [...], "
+            "mutable_properties: [...], has_test_hooks: true}\n\n"
+            "USE THIS before natural-language testing to inspect what can be asserted or driven."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
+        name="godot_compile_nl_test",
+        description=(
+            "Compile free-form natural language test intent into executable IR steps.\n\n"
+            "Example:\n"
+            "  spec_text: 'set /root/Main.score to 10. /root/Main.score should be 10'\n"
+            "  → {compile_status: 'OK', confidence: 0.9, compiled_plan: {...}}\n\n"
+            "USE THIS to preview or debug how text is interpreted before running."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "spec_text": {
+                    "type": "string",
+                    "description": "Free-form natural-language test specification.",
+                },
+                "scene": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional scene path to run.",
+                },
+            },
+            "required": ["spec_text"],
+        },
+    ),
+    Tool(
+        name="godot_run_nl_test",
+        description=(
+            "Compile and execute a free-form natural-language test end-to-end.\n\n"
+            "Example:\n"
+            "  spec_text: 'press ui_accept and text \"Game Over\" should appear'\n"
+            "  → {result: 'PASS|FAIL|UNDETERMINED', confidence: 0.84, evidence: [...]} \n\n"
+            "USE THIS as the primary high-level automation entrypoint."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "spec_text": {
+                    "type": "string",
+                    "description": "Free-form natural-language test specification.",
+                },
+                "scene": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional scene path to run.",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["auto", "headless", "windowed"],
+                    "default": "auto",
+                    "description": "auto picks windowed when visual assertions are present, otherwise headless.",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "default": 90,
+                    "description": "Max allowed execution time for this run.",
+                },
+                "artifact_level": {
+                    "type": "string",
+                    "enum": ["minimal", "full"],
+                    "default": "full",
+                    "description": "Artifact verbosity level for screenshots/frames/logs.",
+                },
+            },
+            "required": ["spec_text"],
+        },
+    ),
 ]
 
 
@@ -563,6 +648,13 @@ async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
         return await _godot_run_script(arguments)
     elif name == "godot_batch":
         return await _godot_batch(arguments)
+    # ── Natural language tools ───────────────────────────────────────
+    elif name == "godot_get_nl_capabilities":
+        return await _godot_get_nl_capabilities(arguments)
+    elif name == "godot_compile_nl_test":
+        return await _godot_compile_nl_test(arguments)
+    elif name == "godot_run_nl_test":
+        return await _godot_run_nl_test(arguments)
     else:
         return _text({"error": f"Unknown tool: {name}"})
 
@@ -795,14 +887,30 @@ async def _ensure_ws() -> None:
         await ws_client.connect()
 
 
-async def _ws_tool(method: str, params: dict | None = None) -> list[TextContent]:
-    """Common pattern for Phase 2 WS tools."""
+async def _ws_command(method: str, params: dict | None = None) -> dict[str, Any]:
+    """Send one command to the Godot harness and return raw dict payload."""
     try:
         await _ensure_ws()
         result = await ws_client.send_command(method, params)
-        return _text({"status": "ok", **result})
+        return {"status": "ok", **result}
     except (ConnectionError, RuntimeError) as e:
-        return _text({"status": "error", "message": str(e)})
+        return {"status": "error", "message": str(e)}
+
+
+async def _ws_tool(method: str, params: dict | None = None) -> list[TextContent]:
+    """Common pattern for WS-backed tools."""
+    return _text(await _ws_command(method, params))
+
+
+def _decode_text_result(contents: list[TextContent]) -> dict[str, Any]:
+    """Decode the first TextContent JSON payload into a dictionary."""
+    if len(contents) == 0:
+        return {}
+    payload: TextContent = contents[0]
+    try:
+        return json.loads(payload.text)
+    except json.JSONDecodeError:
+        return {"status": "error", "message": "invalid JSON payload"}
 
 
 async def _godot_get_tree(args: dict) -> list[TextContent]:
@@ -873,6 +981,154 @@ async def _godot_run_script(args: dict) -> list[TextContent]:
 
 async def _godot_batch(args: dict) -> list[TextContent]:
     return await _ws_tool("batch", {"expressions": args.get("expressions", [])})
+
+
+async def _godot_get_nl_capabilities(args: dict) -> list[TextContent]:
+    _ = args
+    payload = await _ws_command("get_capabilities", {})
+    if payload.get("status") == "ok":
+        nodes = payload.get("nodes", [])
+        groups = payload.get("groups", [])
+        hook_targets = payload.get("hook_targets", [])
+        if not isinstance(nodes, list):
+            nodes = []
+        if not isinstance(groups, list):
+            groups = []
+        if not isinstance(hook_targets, list):
+            hook_targets = []
+
+        payload["nodes"] = nodes
+        payload["groups"] = groups
+        payload["hook_targets"] = hook_targets
+        payload.setdefault("node_count", len(nodes))
+        payload.setdefault("groups_count", len(groups))
+        payload.setdefault("hook_methods", [])
+    return _text(payload)
+
+
+async def _godot_compile_nl_test(args: dict) -> list[TextContent]:
+    spec_text = str(args.get("spec_text", "")).strip()
+    scene = str(args.get("scene", "")).strip()
+    if spec_text == "":
+        return _text({
+            "compile_status": "FAILED",
+            "confidence": 0.0,
+            "unsupported_phrases": [],
+            "compiled_plan": {},
+            "error": "spec_text is required",
+        })
+
+    compiled = nl_compiler.compile(spec_text=spec_text, scene=scene)
+    compile_status = _compile_status(compiled.confidence, len(compiled.unsupported_phrases))
+    return _text({
+        "compile_status": compile_status,
+        "confidence": compiled.confidence,
+        "unsupported_phrases": compiled.unsupported_phrases,
+        "requires_visual": compiled.requires_visual,
+        "requires_input": compiled.requires_input,
+        "compiled_plan": compiled.to_dict(),
+    })
+
+
+async def _godot_run_nl_test(args: dict) -> list[TextContent]:
+    spec_text = str(args.get("spec_text", "")).strip()
+    scene = str(args.get("scene", "")).strip()
+    mode = str(args.get("mode", "auto")).strip().lower()
+    timeout_seconds = int(args.get("timeout_seconds", 90))
+    artifact_level = str(args.get("artifact_level", "full")).strip().lower()
+
+    if spec_text == "":
+        return _text({
+            "result": "ERROR",
+            "confidence": 0.0,
+            "summary": "spec_text is required",
+            "compiled_plan": {},
+            "unsupported_phrases": [],
+            "evidence": [],
+            "errors": [{"message": "spec_text is required"}],
+        })
+
+    if mode not in {"auto", "headless", "windowed"}:
+        mode = "auto"
+    if artifact_level not in {"minimal", "full"}:
+        artifact_level = "full"
+    if timeout_seconds <= 0:
+        timeout_seconds = 90
+
+    compiled = nl_compiler.compile(spec_text=spec_text, scene=scene)
+    if compiled.confidence < 0.2:
+        return _text({
+            "result": "ERROR",
+            "confidence": compiled.confidence,
+            "summary": "failed to compile natural-language spec with sufficient confidence",
+            "compiled_plan": compiled.to_dict(),
+            "unsupported_phrases": compiled.unsupported_phrases,
+            "evidence": [],
+            "errors": [{"message": "compile confidence too low"}],
+        })
+
+    if "manager" not in globals():
+        return _text({
+            "result": "ERROR",
+            "confidence": compiled.confidence,
+            "summary": "server manager is not initialized",
+            "compiled_plan": compiled.to_dict(),
+            "unsupported_phrases": compiled.unsupported_phrases,
+            "evidence": [],
+            "errors": [{"message": "manager not initialized"}],
+        })
+
+    project_path = manager._config.project_path
+
+    async def _ctx_launch(runtime_mode: str, runtime_scene: str) -> dict[str, Any]:
+        return _decode_text_result(await _godot_launch({
+            "mode": runtime_mode,
+            "scene": runtime_scene,
+            "extra_args": [],
+            "test_harness": True,
+        }))
+
+    async def _ctx_stop(force: bool) -> dict[str, Any]:
+        return _decode_text_result(await _godot_stop({"force": force}))
+
+    async def _ctx_ws(method: str, params: dict | None) -> dict[str, Any]:
+        return await _ws_command(method, params)
+
+    def _ctx_read_errors() -> dict[str, list[dict[str, Any]]]:
+        return {
+            "errors": manager.get_errors(),
+            "warnings": manager.get_warnings(),
+        }
+
+    def _ctx_read_output(tail_lines: int) -> list[str]:
+        return manager.get_output(tail=tail_lines, pattern="")
+
+    context = NLExecutionContext(
+        project_path=project_path,
+        launch=_ctx_launch,
+        stop=_ctx_stop,
+        ws_command=_ctx_ws,
+        read_errors=_ctx_read_errors,
+        read_output=_ctx_read_output,
+    )
+
+    report = await nl_executor.run(
+        plan=compiled,
+        mode=mode,
+        timeout_seconds=timeout_seconds,
+        artifact_level=artifact_level,
+        context=context,
+    )
+    return _text(report)
+
+
+def _compile_status(confidence: float, unsupported_count: int) -> str:
+    """Return compile status label from confidence and unsupported phrase count."""
+    if confidence < 0.3:
+        return "FAILED"
+    if unsupported_count > 0 or confidence < 0.75:
+        return "PARTIAL"
+    return "OK"
 
 
 # ── Entrypoint ──────────────────────────────────────────────────────────

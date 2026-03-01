@@ -1,0 +1,41 @@
+{
+  "name": "core",
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "contract_tools_present",
+      "kind": "contract_tools_present",
+      "required_tools": [
+        "godot_get_nl_capabilities",
+        "godot_compile_nl_test",
+        "godot_run_nl_test"
+      ]
+    },
+    {
+      "id": "compile_basic",
+      "kind": "compile",
+      "spec_text": "set /root/Main.score to 10. /root/Main.score should be 10",
+      "allowed_compile_status": ["OK", "PARTIAL"]
+    },
+    {
+      "id": "unsupported_phrase_detected",
+      "kind": "compile",
+      "spec_text": "quantum banana hyperdrive makes no structured sense",
+      "expect_unsupported_min": 1,
+      "allowed_compile_status": ["FAILED", "PARTIAL", "OK"]
+    },
+    {
+      "id": "run_no_error_smoke",
+      "kind": "run",
+      "spec_text": "no errors for 1 seconds",
+      "mode": "auto",
+      "artifact_level": "minimal",
+      "accepted_nl_results": ["PASS", "FAIL", "UNDETERMINED", "ERROR"]
+    },
+    {
+      "id": "artifact_presence",
+      "kind": "artifact_presence",
+      "depends_on": "run_no_error_smoke"
+    }
+  ]
+}

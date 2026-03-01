@@ -1,4 +1,4 @@
-## TestHarness — Injected by godot-test-mcp. DO NOT EDIT.
+## TestHarness - Injected by godot-test-mcp. DO NOT EDIT.
 ## This file is automatically created at launch and removed on stop.
 ## WebSocket JSON-RPC server for external test automation.
 extends Node
@@ -88,6 +88,18 @@ func _dispatch(method: String, params: Dictionary) -> Dictionary:
 			return _cmd_call_method(params)
 		"get_nodes_in_group":
 			return _cmd_get_nodes_in_group(params)
+		"get_capabilities":
+			return _cmd_get_capabilities(params)
+		"capture_screenshot":
+			return _cmd_capture_screenshot(params)
+		"capture_frame":
+			return _cmd_capture_frame(params)
+		"get_visual_snapshot":
+			return _cmd_get_visual_snapshot(params)
+		"send_input":
+			return _cmd_send_input(params)
+		"wait_frames":
+			return _cmd_wait_frames(params)
 		"eval":
 			return _cmd_eval(params)
 		"inspect":
@@ -106,7 +118,7 @@ func _dispatch(method: String, params: Dictionary) -> Dictionary:
 			return {"error": {"code": -32601, "message": "Unknown method: %s" % method}}
 
 
-## ── Generic Godot commands (work with ANY project) ──
+## -- Generic Godot commands (work with ANY project) --
 
 func _cmd_get_tree_info() -> Dictionary:
 	var root := get_tree().root
@@ -128,22 +140,22 @@ func _cmd_get_node(params: Dictionary) -> Dictionary:
 	var node: Node = get_tree().root.get_node_or_null(path)
 	if node == null:
 		return {"error": {"code": -1, "message": "Node not found: %s" % path}}
+
 	var props: Dictionary = {}
 	for prop in node.get_property_list():
-		var pname: String = prop["name"]
-		if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
-			var val = node.get(pname)
-			if val is bool or val is int or val is float or val is String:
-				props[pname] = val
-			elif val is Vector2 or val is Vector2i:
-				props[pname] = {"x": val.x, "y": val.y}
-			elif val is Vector3 or val is Vector3i:
-				props[pname] = {"x": val.x, "y": val.y, "z": val.z}
-			elif val is Dictionary:
-				props[pname] = _safe_dict(val)
-			elif val is Array:
-				props[pname] = _safe_array(val)
-	return {"result": {"path": str(node.get_path()), "class": node.get_class(), "name": node.name, "properties": props}}
+		if not _include_property(prop):
+			continue
+		var pname: String = str(prop.get("name", ""))
+		props[pname] = _safe_value(node.get(pname))
+
+	return {
+		"result": {
+			"path": str(node.get_path()),
+			"class": node.get_class(),
+			"name": node.name,
+			"properties": props,
+		}
+	}
 
 
 func _cmd_get_property(params: Dictionary) -> Dictionary:
@@ -152,7 +164,7 @@ func _cmd_get_property(params: Dictionary) -> Dictionary:
 	var node: Node = get_tree().root.get_node_or_null(path)
 	if node == null:
 		return {"error": {"code": -1, "message": "Node not found: %s" % path}}
-	if not property in node:
+	if not _has_property(node, property):
 		return {"error": {"code": -1, "message": "Property '%s' not found on %s" % [property, path]}}
 	var val = node.get(property)
 	return {"result": {"path": path, "property": property, "value": _safe_value(val)}}
@@ -191,6 +203,136 @@ func _cmd_get_nodes_in_group(params: Dictionary) -> Dictionary:
 	return {"result": {"group": group, "count": nodes.size(), "nodes": result}}
 
 
+func _cmd_get_capabilities(_params: Dictionary) -> Dictionary:
+	var nodes: Array = []
+	var groups_seen: Dictionary = {}
+	var hook_methods: Array = []
+	var hook_targets: Array = []
+	var mutable_properties: Array = []
+	_collect_capabilities(
+		get_tree().root,
+		nodes,
+		groups_seen,
+		hook_methods,
+		hook_targets,
+		mutable_properties
+	)
+
+	return {
+		"result": {
+			"nodes": nodes,
+			"groups": groups_seen.keys(),
+			"groups_count": groups_seen.size(),
+			"node_count": nodes.size(),
+			"hook_methods": hook_methods,
+			"hook_targets": hook_targets,
+			"mutable_properties": mutable_properties,
+			"visual_channels": ["screenshot", "frame", "snapshot"],
+			"input_channels": ["action", "key"],
+			"has_test_hooks": hook_methods.size() > 0,
+		}
+	}
+
+
+func _cmd_capture_screenshot(params: Dictionary) -> Dictionary:
+	var requested_path: String = str(params.get("path", "")).strip_edges()
+	var output_path: String = requested_path if requested_path != "" else "user://godot-test-mcp/screenshot_%d.png" % Time.get_unix_time_from_system()
+
+	var viewport := get_viewport()
+	if viewport == null:
+		return {"error": {"code": -1, "message": "Viewport not available"}}
+
+	var image: Image = viewport.get_texture().get_image()
+	if image == null:
+		return {"error": {"code": -1, "message": "Failed to capture viewport image"}}
+
+	_ensure_output_dir(output_path)
+	var err: int = image.save_png(output_path)
+	if err != OK:
+		return {"error": {"code": -1, "message": "save_png failed with code %d" % err}}
+
+	return {
+		"result": {
+			"path": output_path,
+			"width": image.get_width(),
+			"height": image.get_height(),
+		}
+	}
+
+
+func _cmd_capture_frame(params: Dictionary) -> Dictionary:
+	var requested_path: String = str(params.get("path", "")).strip_edges()
+	var output_path: String = requested_path if requested_path != "" else "user://godot-test-mcp/frame_%d.png" % Time.get_unix_time_from_system()
+	var capture_result: Dictionary = _cmd_capture_screenshot({"path": output_path})
+	if capture_result.has("error"):
+		return capture_result
+	return {"result": {"path": output_path}}
+
+
+func _cmd_get_visual_snapshot(params: Dictionary) -> Dictionary:
+	var max_nodes: int = int(params.get("max_nodes", 500))
+	if max_nodes <= 0:
+		max_nodes = 500
+
+	var nodes: Array = []
+	_collect_visual_nodes(get_tree().root, nodes, max_nodes)
+
+	var visible_count: int = 0
+	for node_info in nodes:
+		if bool(node_info.get("visible", false)):
+			visible_count += 1
+
+	var visible_rect: Rect2 = get_viewport().get_visible_rect()
+	return {
+		"result": {
+			"nodes": nodes,
+			"visible_node_count": visible_count,
+			"total_node_count": nodes.size(),
+			"viewport": {
+				"width": visible_rect.size.x,
+				"height": visible_rect.size.y,
+			},
+		}
+	}
+
+
+func _cmd_send_input(params: Dictionary) -> Dictionary:
+	var action: String = str(params.get("action", "")).strip_edges()
+	var key_name: String = str(params.get("key", "")).strip_edges()
+	var pressed: bool = bool(params.get("pressed", true))
+
+	if action != "":
+		var action_event := InputEventAction.new()
+		action_event.action = action
+		action_event.pressed = pressed
+		action_event.strength = float(params.get("strength", 1.0))
+		Input.parse_input_event(action_event)
+		return {"result": {"ok": true, "kind": "action", "action": action, "pressed": pressed}}
+
+	if key_name != "":
+		var keycode: int = OS.find_keycode_from_string(key_name)
+		if keycode == 0:
+			return {"error": {"code": -1, "message": "Unknown key name: %s" % key_name}}
+		var key_event := InputEventKey.new()
+		key_event.keycode = keycode
+		key_event.pressed = pressed
+		Input.parse_input_event(key_event)
+		return {"result": {"ok": true, "kind": "key", "key": key_name, "pressed": pressed}}
+
+	return {"error": {"code": -1, "message": "send_input requires 'action' or 'key'"}}
+
+
+func _cmd_wait_frames(params: Dictionary) -> Dictionary:
+	var frames: int = int(params.get("frames", 1))
+	if frames < 1:
+		frames = 1
+	var fallback_fps: float = 60.0
+	var fps: float = fallback_fps if Engine.max_fps <= 0 else float(Engine.max_fps)
+	var wait_ms: int = int(ceil((1000.0 / fps) * frames))
+	OS.delay_msec(wait_ms)
+	return {"result": {"waited_frames": frames, "waited_ms": wait_ms}}
+
+
 func _cmd_eval(params: Dictionary) -> Dictionary:
 	var expr_str: String = str(params.get("expression", ""))
 	var expr := Expression.new()
@@ -225,7 +367,6 @@ func _cmd_inspect(params: Dictionary) -> Dictionary:
 
 func _inspect_object(obj: Variant, depth: int) -> Dictionary:
 	var result: Dictionary = {}
-
 	result["type"] = type_string(typeof(obj))
 
 	if not (obj is Object):
@@ -238,57 +379,70 @@ func _inspect_object(obj: Variant, depth: int) -> Dictionary:
 	if script:
 		result["script"] = script.resource_path
 
-	# Properties — SCRIPT VARIABLES ONLY (filter engine noise)
+	# Properties - language-agnostic (stored + script vars)
 	var properties: Dictionary = {}
 	for prop in obj.get_property_list():
-		if prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE:
-			var pname: String = prop["name"]
-			var val = obj.get(pname)
-			var prop_info: Dictionary = {
-				"type": type_string(prop["type"]),
-			}
-			if val is Dictionary:
-				prop_info["value"] = "<Dictionary size:%d>" % val.size() if val.size() > 10 else _safe_dict(val)
-				prop_info["keys"] = _safe_array(val.keys()) if val.size() <= 50 else ["<%d keys>" % val.size()]
-			elif val is Array:
-				prop_info["value"] = "<Array size:%d>" % val.size() if val.size() > 10 else _safe_array(val)
-			else:
-				prop_info["value"] = _safe_value(val)
-			properties[pname] = prop_info
+		if not _include_property(prop):
+			continue
+		var pname: String = str(prop.get("name", ""))
+		var val = obj.get(pname)
+		properties[pname] = {
+			"type": type_string(int(prop.get("type", TYPE_NIL))),
+			"value": _safe_value(val),
+		}
 	result["properties"] = properties
 
-	# Methods — SCRIPT METHODS ONLY
+	# Methods - generic object methods, filtered for readability
 	var methods: Array = []
-	if script:
-		for method in script.get_script_method_list():
-			var mname: String = method["name"]
-			if mname.begins_with("_") and mname != "_ready" and mname != "_process":
-				continue
-			var args: Array = []
-			for arg in method["args"]:
-				args.append({"name": arg["name"], "type": type_string(arg["type"])})
-			methods.append({
-				"name": mname,
-				"args": args,
-				"return_type": type_string(method["return"]["type"]),
-			})
+	for method in obj.get_method_list():
+		var mname: String = str(method.get("name", ""))
+		if mname == "":
+			continue
+		if mname.begins_with("_") and mname != "_ready" and mname != "_process":
+			continue
+		var args: Array = []
+		var raw_args = method.get("args", [])
+		if raw_args is Array:
+			for arg in raw_args:
+				if arg is Dictionary:
+					args.append({
+						"name": str(arg.get("name", "")),
+						"type": type_string(int(arg.get("type", TYPE_NIL))),
+					})
+		methods.append({
+			"name": mname,
+			"args": args,
+			"return_type": type_string(TYPE_NIL),
+		})
+		if methods.size() >= 300:
+			break
 	result["methods"] = methods
 
-	# Signals — SCRIPT SIGNALS ONLY
+	# Signals - generic object signals
 	var signals: Array = []
-	if script:
-		for sig in script.get_script_signal_list():
-			var sig_args: Array = []
-			for arg in sig["args"]:
-				sig_args.append({"name": arg["name"], "type": type_string(arg["type"])})
-			signals.append({"name": sig["name"], "args": sig_args})
+	for sig in obj.get_signal_list():
+		var sig_name: String = str(sig.get("name", ""))
+		if sig_name == "":
+			continue
+		var sig_args: Array = []
+		var raw_sig_args = sig.get("args", [])
+		if raw_sig_args is Array:
+			for arg in raw_sig_args:
+				if arg is Dictionary:
+					sig_args.append({
+						"name": str(arg.get("name", "")),
+						"type": type_string(int(arg.get("type", TYPE_NIL))),
+					})
+		signals.append({"name": sig_name, "args": sig_args})
+		if signals.size() >= 200:
+			break
 	result["signals"] = signals
 
 	# Groups and children (only for Node)
 	if obj is Node:
 		result["groups"] = []
 		for g in obj.get_groups():
-			var gname: String = g
+			var gname: String = str(g)
 			if not gname.begins_with("_"):
 				result["groups"].append(gname)
 
@@ -309,7 +463,7 @@ func _inspect_object(obj: Variant, depth: int) -> Dictionary:
 func _cmd_run_script(params: Dictionary) -> Dictionary:
 	var code: String = str(params.get("code", ""))
 
-	# Security check — block dangerous patterns
+	# Security check - block dangerous patterns
 	for pattern in _BLOCKED_PATTERNS:
 		if code.find(pattern) != -1:
 			return {"error": {"code": -2, "message": "Blocked: '%s' access is not allowed in run_script" % pattern}}
@@ -344,7 +498,6 @@ func _cmd_run_script(params: Dictionary) -> Dictionary:
 	# Execute
 	var instance: RefCounted = script.new()
 	instance._tree_ref = get_tree()
-
 	var result = instance.execute()
 
 	return {"result": {"value": _safe_value(result)}}
@@ -369,7 +522,126 @@ func _cmd_batch(params: Dictionary) -> Dictionary:
 	return {"result": results}
 
 
-## ── Serialization helpers ──
+## -- Helpers --
+
+func _include_property(prop: Dictionary) -> bool:
+	var usage: int = int(prop.get("usage", 0))
+	var has_storage: bool = (usage & PROPERTY_USAGE_STORAGE) != 0
+	var has_script_var: bool = (usage & PROPERTY_USAGE_SCRIPT_VARIABLE) != 0
+	if not has_storage and not has_script_var:
+		return false
+	var pname: String = str(prop.get("name", ""))
+	if pname == "" or pname.begins_with("_"):
+		return false
+	return true
+
+
+func _has_property(obj: Object, property_name: String) -> bool:
+	for prop in obj.get_property_list():
+		if str(prop.get("name", "")) == property_name:
+			return true
+	return false
+
+
+func _collect_capabilities(
+	node: Node,
+	nodes: Array,
+	groups_seen: Dictionary,
+	hook_methods: Array,
+	hook_targets: Array,
+	mutable_properties: Array
+) -> void:
+	nodes.append({"name": node.name, "path": str(node.get_path()), "class": node.get_class()})
+
+	for g in node.get_groups():
+		var gname: String = str(g)
+		if not gname.begins_with("_"):
+			groups_seen[gname] = true
+
+	for method in node.get_method_list():
+		var mname: String = str(method.get("name", ""))
+		if mname.begins_with("test_mcp_") and not hook_methods.has(mname):
+			hook_methods.append(mname)
+		if mname.begins_with("test_mcp_"):
+			var target := {"path": str(node.get_path()), "method": mname}
+			var target_key: String = "%s::%s" % [target["path"], target["method"]]
+			var exists: bool = false
+			for existing in hook_targets:
+				if existing is Dictionary:
+					var existing_key: String = "%s::%s" % [str(existing.get("path", "")), str(existing.get("method", ""))]
+					if existing_key == target_key:
+						exists = true
+						break
+			if not exists:
+				hook_targets.append(target)
+
+	for prop in node.get_property_list():
+		if not _include_property(prop):
+			continue
+		var pname: String = str(prop.get("name", ""))
+		var prop_key: String = "%s.%s" % [str(node.get_path()), pname]
+		if not mutable_properties.has(prop_key):
+			mutable_properties.append(prop_key)
+		if mutable_properties.size() >= 300:
+			break
+
+	for child in node.get_children():
+		if child is Node:
+			_collect_capabilities(
+				child,
+				nodes,
+				groups_seen,
+				hook_methods,
+				hook_targets,
+				mutable_properties
+			)
+		if nodes.size() >= 500:
+			break
+
+
+func _collect_visual_nodes(node: Node, out: Array, max_nodes: int) -> void:
+	if out.size() >= max_nodes:
+		return
+
+	if node is CanvasItem:
+		var canvas_item: CanvasItem = node
+		var entry: Dictionary = {
+			"name": node.name,
+			"path": str(node.get_path()),
+			"class": node.get_class(),
+			"visible": canvas_item.visible,
+		}
+
+		if node is Control:
+			var control: Control = node
+			var rect: Rect2 = control.get_global_rect()
+			entry["rect"] = {
+				"x": rect.position.x,
+				"y": rect.position.y,
+				"w": rect.size.x,
+				"h": rect.size.y,
+			}
+			if _has_property(control, "text"):
+				entry["text"] = str(control.get("text"))
+		elif node is Node2D:
+			var node2d: Node2D = node
+			entry["position"] = {"x": node2d.global_position.x, "y": node2d.global_position.y}
+
+		out.append(entry)
+
+	for child in node.get_children():
+		if child is Node:
+			_collect_visual_nodes(child, out, max_nodes)
+		if out.size() >= max_nodes:
+			return
+
+
+func _ensure_output_dir(path_hint: String) -> void:
+	var global_path: String = ProjectSettings.globalize_path(path_hint)
+	var base_dir: String = global_path.get_base_dir()
+	if base_dir != "":
+		DirAccess.make_dir_recursive_absolute(base_dir)
+
 
 func _safe_value(val) -> Variant:
 	if val == null:
@@ -386,6 +658,7 @@ func _safe_value(val) -> Variant:
 		return _safe_array(val)
 	return str(val)
 
+
 func _safe_dict(d: Dictionary, depth: int = 0) -> Dictionary:
 	if depth > 3:
 		return {"_truncated": true}
@@ -394,6 +667,7 @@ func _safe_dict(d: Dictionary, depth: int = 0) -> Dictionary:
 		result[str(key)] = _safe_value(d[key]) if depth < 3 else str(d[key])
 	return result
 
+
 func _safe_array(a: Array, depth: int = 0) -> Array:
 	if depth > 3 or a.size() > 100:
 		return [{"_truncated": true, "size": a.size()}]
@@ -401,6 +675,7 @@ func _safe_array(a: Array, depth: int = 0) -> Array:
 	for item in a:
 		result.append(_safe_value(item))
 	return result
+
 
 func _count_nodes(node: Node) -> int:
 	var count: int = 1
