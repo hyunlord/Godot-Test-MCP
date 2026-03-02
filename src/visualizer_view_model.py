@@ -127,6 +127,13 @@ class VisualizerViewModelBuilder:
             node_cluster_key=node_cluster_key,
             nodes_by_id=nodes_by_id,
         )
+        board_model = self._build_board_model(
+            clusters=layout.get("clusters", []),
+            edge_layouts=edge_layouts,
+            node_positions=node_positions,
+            nodes_by_id=nodes_by_id,
+            cluster_metrics=cluster_metrics,
+        )
         normalized_default_layer = default_layer if default_layer in {"cluster", "structural", "detail"} else "cluster"
 
         node_count = max(1, len(nodes_by_id))
@@ -148,6 +155,7 @@ class VisualizerViewModelBuilder:
                 "detail": detail_layer,
             },
             "cluster_layout_health": cluster_layout_health,
+            "board_model": board_model,
             "ui_defaults": {
                 "default_layer": normalized_default_layer,
                 "hidden_edge_types": ["calls"],
@@ -494,6 +502,158 @@ class VisualizerViewModelBuilder:
             )
         metrics.sort(key=lambda item: item["hotspot_score"], reverse=True)
         return metrics
+
+    def _build_board_model(
+        self,
+        *,
+        clusters: list[dict[str, Any]],
+        edge_layouts: list[dict[str, Any]],
+        node_positions: dict[str, dict[str, float]],
+        nodes_by_id: dict[str, dict[str, Any]],
+        cluster_metrics: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        metric_by_key: dict[str, dict[str, Any]] = {}
+        for metric in cluster_metrics:
+            if not isinstance(metric, dict):
+                continue
+            key = str(metric.get("key", "")).strip().lower()
+            if key:
+                metric_by_key[key] = metric
+
+        links_counter: Counter[tuple[str, str]] = Counter()
+        external_counter: Counter[str] = Counter()
+        for edge in edge_layouts:
+            source = str(edge.get("source", "")).strip()
+            target = str(edge.get("target", "")).strip()
+            source_cluster = str(node_positions.get(source, {}).get("cluster_id", "")).strip()
+            target_cluster = str(node_positions.get(target, {}).get("cluster_id", "")).strip()
+            if source_cluster == "" or target_cluster == "" or source_cluster == target_cluster:
+                continue
+            links_counter[(source_cluster, target_cluster)] += 1
+            external_counter[source_cluster] += 1
+            external_counter[target_cluster] += 1
+
+        cluster_members: dict[str, list[dict[str, Any]]] = {}
+        for node in nodes_by_id.values():
+            if not isinstance(node, dict):
+                continue
+            layout = node.get("layout", {}) if isinstance(node.get("layout", {}), dict) else {}
+            cluster_id = str(layout.get("cluster_id", "")).strip()
+            if cluster_id == "":
+                continue
+            cluster_members.setdefault(cluster_id, []).append(node)
+
+        for members in cluster_members.values():
+            members.sort(
+                key=lambda item: (
+                    str(item.get("kind", "unknown")),
+                    str(item.get("label", item.get("id", ""))).lower(),
+                )
+            )
+
+        board_clusters: list[dict[str, Any]] = []
+        for cluster in clusters:
+            if not isinstance(cluster, dict):
+                continue
+            cluster_id = str(cluster.get("id", "")).strip()
+            if cluster_id == "":
+                continue
+            cluster_key = str(cluster.get("key", "")).strip().lower()
+            cluster_title = str(cluster.get("title", "")).strip() or cluster_id
+            metric = metric_by_key.get(cluster_key, {})
+
+            cards: list[dict[str, Any]] = []
+            rect_x = float(cluster.get("x", 0.0))
+            rect_y = float(cluster.get("y", 0.0))
+            rect_w = float(cluster.get("w", 0.0))
+            members = cluster_members.get(cluster_id, [])
+            card_w = 220.0
+            card_h = 72.0
+            gap_x = 16.0
+            gap_y = 12.0
+            pad_x = 16.0
+            pad_y = 44.0
+            usable_w = max(1.0, rect_w - pad_x * 2.0)
+            columns = max(1, int((usable_w + gap_x) // (card_w + gap_x)))
+            for index, vm_node in enumerate(members):
+                node_id = str(vm_node.get("id", "")).strip()
+                if node_id == "":
+                    continue
+                node_metrics = vm_node.get("metrics", {}) if isinstance(vm_node.get("metrics", {}), dict) else {}
+                col = index % columns
+                row = index // columns
+                card_x = rect_x + pad_x + col * (card_w + gap_x)
+                card_y = rect_y + pad_y + row * (card_h + gap_y)
+                cards.append(
+                    {
+                        "id": node_id,
+                        "title": str(vm_node.get("label", node_id)),
+                        "kind": str(vm_node.get("kind", "unknown")),
+                        "stats": {
+                            "in": int(node_metrics.get("in_degree", 0)),
+                            "out": int(node_metrics.get("out_degree", 0)),
+                            "loc": int(node_metrics.get("loc", vm_node.get("loc", 0))),
+                        },
+                        "x": card_x,
+                        "y": card_y,
+                        "w": card_w,
+                        "h": card_h,
+                    }
+                )
+
+            board_clusters.append(
+                {
+                    "id": cluster_id,
+                    "title": cluster_title,
+                    "rect": {
+                        "x": rect_x,
+                        "y": rect_y,
+                        "w": rect_w,
+                        "h": float(cluster.get("h", 0.0)),
+                    },
+                    "cards": cards,
+                    "summary": {
+                        "node_count": int(metric.get("node_count", len(cards))),
+                        "external_count": int(external_counter.get(cluster_id, 0)),
+                        "hot": float(metric.get("hotspot_score", 0.0)),
+                    },
+                }
+            )
+
+        board_links: list[dict[str, Any]] = []
+        for (source_cluster, target_cluster), count in sorted(links_counter.items(), key=lambda item: item[1], reverse=True):
+            board_links.append(
+                {
+                    "source_cluster": source_cluster,
+                    "target_cluster": target_cluster,
+                    "count": int(count),
+                }
+            )
+
+        hotspot_candidates = []
+        for node in nodes_by_id.values():
+            if not isinstance(node, dict):
+                continue
+            kind = str(node.get("kind", "")).strip()
+            if kind in {"cluster"}:
+                continue
+            metrics = node.get("metrics", {}) if isinstance(node.get("metrics", {}), dict) else {}
+            degree = int(metrics.get("in_degree", 0)) + int(metrics.get("out_degree", 0))
+            hotspot_candidates.append(
+                {
+                    "node_id": str(node.get("id", "")),
+                    "label": str(node.get("label", node.get("id", ""))),
+                    "degree": degree,
+                    "cluster_id": str((node.get("layout", {}) if isinstance(node.get("layout", {}), dict) else {}).get("cluster_id", "")),
+                }
+            )
+        hotspot_candidates.sort(key=lambda item: item["degree"], reverse=True)
+
+        return {
+            "clusters": board_clusters,
+            "links": board_links,
+            "hotspots": hotspot_candidates[:25],
+        }
 
     def _edge_points_from_layout(
         self,

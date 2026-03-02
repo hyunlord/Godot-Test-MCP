@@ -26,6 +26,44 @@ export interface BundleCluster {
   metrics?: { size?: number; external_w?: number; hot?: number };
 }
 
+export interface BoardCard {
+  id: string;
+  title: string;
+  kind: string;
+  stats?: { in?: number; out?: number; loc?: number };
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface BoardCluster {
+  id: string;
+  title: string;
+  rect: { x: number; y: number; w: number; h: number };
+  cards: BoardCard[];
+  summary?: { node_count?: number; external_count?: number; hot?: number };
+}
+
+export interface BoardLink {
+  source_cluster: string;
+  target_cluster: string;
+  count: number;
+}
+
+export interface BoardHotspot {
+  node_id: string;
+  label: string;
+  degree: number;
+  cluster_id?: string;
+}
+
+export interface BoardModel {
+  clusters: BoardCluster[];
+  links: BoardLink[];
+  hotspots: BoardHotspot[];
+}
+
 export interface GraphBundle {
   schema_version: string;
   meta: {
@@ -35,6 +73,9 @@ export interface GraphBundle {
     node_count?: number;
     edge_count?: number;
     runtime_source?: string;
+    renderer_backend?: string;
+    renderer_error_code?: string;
+    renderer_error?: string;
   };
   string_pool: string[];
   node_kinds: string[];
@@ -57,6 +98,7 @@ export interface GraphBundle {
     duplicate_anchor_count?: number;
     max_density_band?: string;
   };
+  board_model?: BoardModel;
 }
 
 export interface ViewModelNode {
@@ -103,6 +145,7 @@ export interface ViewModel {
     duplicate_anchor_count?: number;
     max_density_band?: string;
   };
+  board_model?: BoardModel;
 }
 
 export interface VisualizerPayload {

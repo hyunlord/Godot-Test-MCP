@@ -87,3 +87,4 @@ def test_bundle_builder_splits_calls_and_builds_cluster_aggregate() -> None:
     assert len(bundle["clusters"]) == 2
     assert len(bundle["cluster_edges"]) == 1
     assert bundle["search_index"]["items"][0]["node_id"] == "file::a"
+    assert "board_model" in bundle

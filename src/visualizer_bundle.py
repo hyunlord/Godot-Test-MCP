@@ -92,6 +92,8 @@ class VisualizerBundleBuilder:
         bundle_edges: list[dict[str, Any]] = []
         calls_edges: list[dict[str, Any]] = []
         edge_types: set[str] = set()
+        aggregated_edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+        aggregated_calls: dict[tuple[str, str, str], dict[str, Any]] = {}
 
         for edge in edges:
             if not isinstance(edge, dict):
@@ -102,16 +104,31 @@ class VisualizerBundleBuilder:
                 continue
             edge_type = str(edge.get("edge_type", "unknown")).strip() or "unknown"
             edge_types.add(edge_type)
+            key = (source, target, edge_type)
             record = {
                 "s": source,
                 "t": target,
                 "type": edge_type,
                 "w": float(edge.get("confidence", edge.get("weight", 1.0)) or 1.0),
+                "count": 1,
             }
             if edge_type == "calls":
-                calls_edges.append(record)
+                current = aggregated_calls.get(key)
+                if current is None:
+                    aggregated_calls[key] = record
+                else:
+                    current["w"] = float(current["w"]) + float(record["w"])
+                    current["count"] = int(current["count"]) + 1
             else:
-                bundle_edges.append(record)
+                current = aggregated_edges.get(key)
+                if current is None:
+                    aggregated_edges[key] = record
+                else:
+                    current["w"] = float(current["w"]) + float(record["w"])
+                    current["count"] = int(current["count"]) + 1
+
+        bundle_edges = list(aggregated_edges.values())
+        calls_edges = list(aggregated_calls.values())
 
         cluster_metrics_source = (
             view_model.get("cluster_metrics", [])
@@ -208,6 +225,7 @@ class VisualizerBundleBuilder:
             "diff": diff_payload,
             "ui_defaults": view_model.get("ui_defaults", {}),
             "cluster_layout_health": view_model.get("cluster_layout_health", {}),
+            "board_model": view_model.get("board_model", {}),
         }
 
     def _layout_positions(self, *, view_model: dict[str, Any], layer_name: str) -> dict[str, Any]:

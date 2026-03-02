@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { BoardRenderer } from '../graph/renderers/board_renderer';
 import { Canvas2DRenderer } from '../graph/renderers/canvas2d_renderer';
 import { SigmaRenderer } from '../graph/renderers/sigma_renderer';
 import type {
@@ -11,11 +12,12 @@ import type {
 import { buildVisibleGraph } from '../graph/visible';
 import { useVisualizerStore } from '../state/useVisualizerStore';
 import type {
+  BoardModel,
   GraphBundle,
   SearchResultItem,
-  VisualizerPayload,
   ViewModelNode,
   VisualizerMode,
+  VisualizerPayload,
 } from '../types/visualizer';
 
 function nodeColor(kind: string): string {
@@ -76,19 +78,20 @@ function shortestPathUndirected(
   start: string,
   goal: string,
 ): string[] {
-  if (!start || !goal) return [];
+  if (start === '' || goal === '') return [];
   if (start === goal) return [start];
+
   const visited = new Set<string>([start]);
   const parent = new Map<string, string>();
   const queue: string[] = [start];
 
   while (queue.length > 0) {
-    const node = queue.shift() as string;
-    const neighbors = [...(adjacency?.in?.[node] ?? []), ...(adjacency?.out?.[node] ?? [])];
+    const current = queue.shift() as string;
+    const neighbors = [...(adjacency?.in?.[current] ?? []), ...(adjacency?.out?.[current] ?? [])];
     for (const next of neighbors) {
       if (visited.has(next)) continue;
       visited.add(next);
-      parent.set(next, node);
+      parent.set(next, current);
       if (next === goal) {
         const path: string[] = [goal];
         let cursor = goal;
@@ -102,44 +105,8 @@ function shortestPathUndirected(
       queue.push(next);
     }
   }
+
   return [];
-}
-
-function useNodeLookup(bundle: GraphBundle | null) {
-  return useMemo(() => {
-    const lookup = new Map<string, { label: string; path: string; kind: string; clusterId: string }>();
-    if (bundle == null) return lookup;
-    const pool = bundle.string_pool ?? [];
-    for (const node of bundle.nodes ?? []) {
-      lookup.set(node.id, {
-        label: String(pool[node.label_i] ?? node.id),
-        path: String(pool[node.path_i] ?? ''),
-        kind: node.kind,
-        clusterId: node.cluster_id,
-      });
-    }
-    return lookup;
-  }, [bundle]);
-}
-
-function summarizeNode(node: ViewModelNode | undefined, fallback: { label: string; path: string; kind: string } | undefined) {
-  return {
-    id: node?.id ?? fallback?.label ?? '',
-    kind: node?.kind ?? fallback?.kind ?? 'unknown',
-    label: node?.label ?? fallback?.label ?? '',
-    path: node?.path ?? fallback?.path ?? '',
-    inDegree: Number(node?.metrics?.in_degree ?? 0),
-    outDegree: Number(node?.metrics?.out_degree ?? 0),
-    loc: Number(node?.metrics?.loc ?? 0),
-    metadata: node?.metadata ?? {},
-  };
-}
-
-function clusterDisplayName(clusterId: string, payload: VisualizerPayload): string {
-  const clusters = payload.view_model?.clusters ?? [];
-  const cluster = clusters.find((item) => String(item.id) === clusterId);
-  if (cluster) return String(cluster.title || cluster.key || clusterId);
-  return clusterId.replace('cluster::', '');
 }
 
 function supportsWebGL(): boolean {
@@ -160,6 +127,131 @@ function isCanvasRendererForced(): boolean {
   }
 }
 
+function classifyRendererError(message: string): string {
+  const lowered = message.toLowerCase();
+  if (lowered.includes('already exists')) return 'duplicate_edges';
+  if (lowered.includes('webgl') || lowered.includes('blendfunc')) return 'webgl_init_failed';
+  return 'render_exception';
+}
+
+function useNodeLookup(bundle: GraphBundle | null) {
+  return useMemo(() => {
+    const lookup = new Map<string, { label: string; path: string; kind: string; clusterId: string }>();
+    if (bundle == null) return lookup;
+    const pool = bundle.string_pool ?? [];
+    for (const node of bundle.nodes ?? []) {
+      lookup.set(node.id, {
+        label: String(pool[node.label_i] ?? node.id),
+        path: String(pool[node.path_i] ?? ''),
+        kind: node.kind,
+        clusterId: node.cluster_id,
+      });
+    }
+    return lookup;
+  }, [bundle]);
+}
+
+function summarizeNode(
+  node: ViewModelNode | undefined,
+  fallback: { label: string; path: string; kind: string } | undefined,
+) {
+  return {
+    id: node?.id ?? fallback?.label ?? '',
+    kind: node?.kind ?? fallback?.kind ?? 'unknown',
+    label: node?.label ?? fallback?.label ?? '',
+    path: node?.path ?? fallback?.path ?? '',
+    inDegree: Number(node?.metrics?.in_degree ?? 0),
+    outDegree: Number(node?.metrics?.out_degree ?? 0),
+    loc: Number(node?.metrics?.loc ?? 0),
+    metadata: node?.metadata ?? {},
+  };
+}
+
+function clusterDisplayName(clusterId: string, payload: VisualizerPayload): string {
+  const clusters = payload.view_model?.clusters ?? [];
+  const cluster = clusters.find((item) => String(item.id) === clusterId);
+  if (cluster) return String(cluster.title || cluster.key || clusterId);
+  return clusterId.replace('cluster::', '');
+}
+
+function getBoardModel(payload: VisualizerPayload): BoardModel | null {
+  const fromView = payload.view_model?.board_model;
+  if (fromView && Array.isArray(fromView.clusters) && Array.isArray(fromView.links) && Array.isArray(fromView.hotspots)) {
+    return fromView;
+  }
+  const fromBundle = payload.graph_bundle?.board_model;
+  if (fromBundle && Array.isArray(fromBundle.clusters) && Array.isArray(fromBundle.links) && Array.isArray(fromBundle.hotspots)) {
+    return fromBundle;
+  }
+  return null;
+}
+
+function boardFrameFromModel(boardModel: BoardModel, mode: VisualizerMode, selectedClusterId: string): RenderFrame['board'] {
+  const cardsLimit = mode === 'cluster' ? 8 : 220;
+  const clusterLookup = new Map(boardModel.clusters.map((cluster) => [cluster.id, cluster]));
+
+  let clusters = boardModel.clusters;
+  if (mode === 'structural') {
+    const focusCluster = selectedClusterId || boardModel.clusters[0]?.id || '';
+    if (focusCluster !== '') {
+      const connected = new Set<string>([focusCluster]);
+      for (const link of boardModel.links) {
+        if (link.source_cluster === focusCluster) connected.add(link.target_cluster);
+        if (link.target_cluster === focusCluster) connected.add(link.source_cluster);
+      }
+      clusters = boardModel.clusters.filter((cluster) => connected.has(cluster.id));
+    }
+  }
+
+  const clusterIds = new Set(clusters.map((cluster) => cluster.id));
+  const links = boardModel.links
+    .filter((link) => clusterIds.has(link.source_cluster) && clusterIds.has(link.target_cluster))
+    .map((link) => ({
+      sourceClusterId: link.source_cluster,
+      targetClusterId: link.target_cluster,
+      count: Number(link.count ?? 0),
+    }));
+
+  const mappedClusters = clusters.map((cluster) => {
+    const cards = cluster.cards.slice(0, cardsLimit).map((card) => ({
+      id: card.id,
+      title: card.title,
+      kind: card.kind,
+      x: Number(card.x),
+      y: Number(card.y),
+      w: Number(card.w),
+      h: Number(card.h),
+      stats: {
+        inDegree: Number(card.stats?.in ?? 0),
+        outDegree: Number(card.stats?.out ?? 0),
+        loc: Number(card.stats?.loc ?? 0),
+      },
+    }));
+    const hiddenCards = Math.max(0, cluster.cards.length - cards.length);
+    const source = clusterLookup.get(cluster.id);
+    return {
+      id: cluster.id,
+      title: cluster.title,
+      x: Number(cluster.rect.x),
+      y: Number(cluster.rect.y),
+      w: Number(cluster.rect.w),
+      h: Number(cluster.rect.h),
+      cards,
+      hiddenCards,
+      summary: {
+        nodeCount: Number(source?.summary?.node_count ?? cluster.cards.length),
+        externalCount: Number(source?.summary?.external_count ?? 0),
+        hot: Number(source?.summary?.hot ?? 0),
+      },
+    };
+  });
+
+  return {
+    clusters: mappedClusters,
+    links,
+  };
+}
+
 export function App() {
   const graphHostRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<GraphRenderer | null>(null);
@@ -169,51 +261,52 @@ export function App() {
   const workerRef = useRef<Worker | null>(null);
 
   const [fps, setFps] = useState(0);
-  const [rendererBackend, setRendererBackend] = useState<RendererBackend>('webgl_sigma');
+  const [rendererBackend, setRendererBackend] = useState<RendererBackend>('board_canvas');
+  const [rendererErrorCode, setRendererErrorCode] = useState('none');
   const [rendererError, setRendererError] = useState('');
   const [clusterSort, setClusterSort] = useState<'size' | 'external' | 'hot'>('size');
 
-  const payload = useVisualizerStore((s) => s.payload);
-  const bundle = useVisualizerStore((s) => s.bundle);
-  const viewModel = useVisualizerStore((s) => s.viewModel);
-  const mode = useVisualizerStore((s) => s.mode);
-  const callsEnabled = useVisualizerStore((s) => s.callsEnabled);
-  const focusScope = useVisualizerStore((s) => s.focusScope);
-  const selectedNodeId = useVisualizerStore((s) => s.selectedNodeId);
-  const selectedClusterId = useVisualizerStore((s) => s.selectedClusterId);
-  const kHop = useVisualizerStore((s) => s.kHop);
-  const pathNodeIds = useVisualizerStore((s) => s.pathNodeIds);
-  const edgeTypeEnabled = useVisualizerStore((s) => s.edgeTypeEnabled);
-  const searchQuery = useVisualizerStore((s) => s.searchQuery);
-  const searchResults = useVisualizerStore((s) => s.searchResults);
-  const searchIndex = useVisualizerStore((s) => s.searchIndex);
-  const visibleNodeCount = useVisualizerStore((s) => s.visibleNodeCount);
-  const visibleEdgeCount = useVisualizerStore((s) => s.visibleEdgeCount);
-  const edgesSampled = useVisualizerStore((s) => s.edgesSampled);
-  const toast = useVisualizerStore((s) => s.toast);
-  const rawJsonOpen = useVisualizerStore((s) => s.rawJsonOpen);
-  const overlay = useVisualizerStore((s) => s.overlay);
-  const diagnosticsCollapsed = useVisualizerStore((s) => s.diagnosticsCollapsed);
+  const payload = useVisualizerStore((state) => state.payload);
+  const bundle = useVisualizerStore((state) => state.bundle);
+  const viewModel = useVisualizerStore((state) => state.viewModel);
+  const mode = useVisualizerStore((state) => state.mode);
+  const callsEnabled = useVisualizerStore((state) => state.callsEnabled);
+  const focusScope = useVisualizerStore((state) => state.focusScope);
+  const selectedNodeId = useVisualizerStore((state) => state.selectedNodeId);
+  const selectedClusterId = useVisualizerStore((state) => state.selectedClusterId);
+  const kHop = useVisualizerStore((state) => state.kHop);
+  const pathNodeIds = useVisualizerStore((state) => state.pathNodeIds);
+  const edgeTypeEnabled = useVisualizerStore((state) => state.edgeTypeEnabled);
+  const searchQuery = useVisualizerStore((state) => state.searchQuery);
+  const searchResults = useVisualizerStore((state) => state.searchResults);
+  const searchIndex = useVisualizerStore((state) => state.searchIndex);
+  const visibleNodeCount = useVisualizerStore((state) => state.visibleNodeCount);
+  const visibleEdgeCount = useVisualizerStore((state) => state.visibleEdgeCount);
+  const edgesSampled = useVisualizerStore((state) => state.edgesSampled);
+  const toast = useVisualizerStore((state) => state.toast);
+  const rawJsonOpen = useVisualizerStore((state) => state.rawJsonOpen);
+  const overlay = useVisualizerStore((state) => state.overlay);
+  const diagnosticsCollapsed = useVisualizerStore((state) => state.diagnosticsCollapsed);
 
-  const setMode = useVisualizerStore((s) => s.setMode);
-  const setSearchQuery = useVisualizerStore((s) => s.setSearchQuery);
-  const setSearchResults = useVisualizerStore((s) => s.setSearchResults);
-  const setSearchIndex = useVisualizerStore((s) => s.setSearchIndex);
-  const selectNode = useVisualizerStore((s) => s.selectNode);
-  const selectCluster = useVisualizerStore((s) => s.selectCluster);
-  const drillToCluster = useVisualizerStore((s) => s.drillToCluster);
-  const drillToDetail = useVisualizerStore((s) => s.drillToDetail);
-  const showPathScope = useVisualizerStore((s) => s.showPathScope);
-  const toggleCalls = useVisualizerStore((s) => s.toggleCalls);
-  const toggleEdgeType = useVisualizerStore((s) => s.toggleEdgeType);
-  const setVisibleMetrics = useVisualizerStore((s) => s.setVisibleMetrics);
-  const goBack = useVisualizerStore((s) => s.goBack);
-  const goForward = useVisualizerStore((s) => s.goForward);
-  const setToast = useVisualizerStore((s) => s.setToast);
-  const toggleRawJson = useVisualizerStore((s) => s.toggleRawJson);
-  const toggleDiagnosticsCollapsed = useVisualizerStore((s) => s.toggleDiagnosticsCollapsed);
+  const setMode = useVisualizerStore((state) => state.setMode);
+  const setSearchQuery = useVisualizerStore((state) => state.setSearchQuery);
+  const setSearchResults = useVisualizerStore((state) => state.setSearchResults);
+  const setSearchIndex = useVisualizerStore((state) => state.setSearchIndex);
+  const selectNode = useVisualizerStore((state) => state.selectNode);
+  const drillToCluster = useVisualizerStore((state) => state.drillToCluster);
+  const drillToDetail = useVisualizerStore((state) => state.drillToDetail);
+  const showPathScope = useVisualizerStore((state) => state.showPathScope);
+  const toggleCalls = useVisualizerStore((state) => state.toggleCalls);
+  const toggleEdgeType = useVisualizerStore((state) => state.toggleEdgeType);
+  const setVisibleMetrics = useVisualizerStore((state) => state.setVisibleMetrics);
+  const goBack = useVisualizerStore((state) => state.goBack);
+  const goForward = useVisualizerStore((state) => state.goForward);
+  const setToast = useVisualizerStore((state) => state.setToast);
+  const toggleRawJson = useVisualizerStore((state) => state.toggleRawJson);
+  const toggleDiagnosticsCollapsed = useVisualizerStore((state) => state.toggleDiagnosticsCollapsed);
 
   const nodeLookup = useNodeLookup(bundle);
+  const boardModel = useMemo(() => getBoardModel(payload), [payload]);
 
   const visible = useMemo(() => {
     if (viewModel == null) return { nodes: [], edges: [], sampled: false };
@@ -236,20 +329,28 @@ export function App() {
     return summarizeNode(fromView, fromBundle);
   }, [viewModel, nodeLookup, selectedNodeId]);
 
+  const selectedClusterSummary = useMemo(() => {
+    if (boardModel == null || selectedClusterId === '') return null;
+    const cluster = boardModel.clusters.find((item) => item.id === selectedClusterId);
+    if (cluster == null) return null;
+    return {
+      title: cluster.title,
+      nodeCount: Number(cluster.summary?.node_count ?? cluster.cards.length),
+      externalCount: Number(cluster.summary?.external_count ?? 0),
+      hot: Number(cluster.summary?.hot ?? 0),
+    };
+  }, [boardModel, selectedClusterId]);
+
   const clusterCards = useMemo(() => {
     if (bundle == null) return [];
     const pool = bundle.string_pool ?? [];
-    const items = (bundle.clusters ?? [])
-      .map((cluster) => {
-        const label = String(pool[cluster.label_i] ?? cluster.id);
-        return {
-          id: cluster.id,
-          label,
-          size: Number(cluster.metrics?.size ?? cluster.node_ids.length),
-          external: Number(cluster.metrics?.external_w ?? 0),
-          hot: Number(cluster.metrics?.hot ?? 0),
-        };
-      });
+    const items = (bundle.clusters ?? []).map((cluster) => ({
+      id: cluster.id,
+      label: String(pool[cluster.label_i] ?? cluster.id),
+      size: Number(cluster.metrics?.size ?? cluster.node_ids.length),
+      external: Number(cluster.metrics?.external_w ?? 0),
+      hot: Number(cluster.metrics?.hot ?? 0),
+    }));
     const sorters = {
       size: (a: (typeof items)[number], b: (typeof items)[number]) => b.size - a.size,
       external: (a: (typeof items)[number], b: (typeof items)[number]) => b.external - a.external,
@@ -259,6 +360,14 @@ export function App() {
   }, [bundle, clusterSort]);
 
   const hubCandidates = useMemo(() => {
+    const hotspots = boardModel?.hotspots ?? [];
+    if (hotspots.length > 0) {
+      return hotspots.slice(0, 5).map((item) => ({
+        id: item.node_id,
+        label: item.label,
+        degree: Number(item.degree ?? 0),
+      }));
+    }
     if (viewModel == null) return [];
     return Object.values(viewModel.nodesById ?? {})
       .filter((node) => String(node.kind) !== 'cluster')
@@ -269,7 +378,7 @@ export function App() {
       }))
       .sort((a, b) => b.degree - a.degree)
       .slice(0, 5);
-  }, [viewModel]);
+  }, [boardModel, viewModel]);
 
   const runtimeDiagnostics = useMemo(() => {
     const diagnostics = payload.meta?.runtime_diagnostics;
@@ -286,7 +395,24 @@ export function App() {
     };
   }, [viewModel?.cluster_layout_health]);
 
+  const boardFrame = useMemo(() => {
+    if (boardModel == null) return undefined;
+    if (mode === 'detail') return undefined;
+    return boardFrameFromModel(boardModel, mode, selectedClusterId);
+  }, [boardModel, mode, selectedClusterId]);
+
   const renderFrame = useMemo<RenderFrame>(() => {
+    if (boardFrame != null) {
+      return {
+        mode,
+        nodes: [],
+        edges: [],
+        board: boardFrame,
+        selectedNodeId,
+        selectedClusterId,
+      };
+    }
+
     const normalized = normalizeNodePositions(visible.nodes);
     return {
       mode,
@@ -311,15 +437,17 @@ export function App() {
         size: Math.max(0.5, Math.min(5, Number(edge.confidence ?? 1))),
         color: edge.edge_type === 'calls' ? '#ff9a7c' : '#5b86d7',
       })),
+      selectedNodeId,
+      selectedClusterId,
     };
-  }, [visible.nodes, visible.edges, mode, selectedNodeId, selectedClusterId, nodeLookup]);
+  }, [boardFrame, mode, selectedNodeId, selectedClusterId, visible.nodes, visible.edges, nodeLookup]);
 
   const createRendererCallbacks = (): GraphRendererCallbacks => ({
     onNodeClick: (nodeId: string) => {
       const state = useVisualizerStore.getState();
       const vmNode = state.viewModel?.nodesById?.[nodeId];
       if (vmNode?.kind === 'cluster' || nodeId.startsWith('cluster::')) {
-        state.selectCluster(nodeId);
+        state.drillToCluster(nodeId);
       } else {
         state.selectNode(nodeId);
       }
@@ -338,24 +466,41 @@ export function App() {
     },
   });
 
-  const switchToCanvasFallback = (reason: string): GraphRenderer | null => {
-    const host = graphHostRef.current;
-    if (host == null) return null;
+  const buildDetailRenderer = (
+    host: HTMLElement,
+    callbacks: GraphRendererCallbacks,
+    forceCanvas: boolean,
+  ): GraphRenderer | null => {
+    if (!forceCanvas && supportsWebGL()) {
+      try {
+        const sigma = new SigmaRenderer(callbacks);
+        sigma.init(host);
+        setRendererBackend('webgl_sigma');
+        setRendererErrorCode('none');
+        setRendererError('');
+        return sigma;
+      } catch (error) {
+        const message = String(error);
+        setRendererBackend('canvas2d_fallback');
+        setRendererErrorCode(classifyRendererError(message));
+        setRendererError(message);
+      }
+    }
 
-    rendererRef.current?.destroy();
-
-    const callbacks = rendererCallbacksRef.current ?? createRendererCallbacks();
     try {
-      const fallback = new Canvas2DRenderer(callbacks);
-      fallback.init(host);
-      rendererRef.current = fallback;
+      const canvas = new Canvas2DRenderer(callbacks);
+      canvas.init(host);
       setRendererBackend('canvas2d_fallback');
-      setRendererError(reason);
-      setToast('WebGL 초기화 실패로 Canvas2D 폴백 모드로 전환되었습니다.');
-      return fallback;
+      if (forceCanvas) {
+        setRendererErrorCode('none');
+        setRendererError('');
+      }
+      return canvas;
     } catch (error) {
-      setRendererError(String(error));
-      rendererRef.current = null;
+      const message = String(error);
+      setRendererBackend('canvas2d_fallback');
+      setRendererErrorCode(classifyRendererError(message));
+      setRendererError(message);
       return null;
     }
   };
@@ -369,32 +514,38 @@ export function App() {
     if (host == null) return;
 
     const callbacks = rendererCallbacksRef.current ?? createRendererCallbacks();
-
-    let renderer: GraphRenderer | null = null;
-
     const forceCanvas = isCanvasRendererForced();
 
-    if (!forceCanvas && supportsWebGL()) {
-      try {
-        const sigma = new SigmaRenderer(callbacks);
-        sigma.init(host);
-        renderer = sigma;
-        setRendererBackend('webgl_sigma');
-        setRendererError('');
-      } catch (error) {
-        renderer = switchToCanvasFallback(String(error));
-      }
-    } else {
-      renderer = switchToCanvasFallback(forceCanvas ? 'Renderer forced to canvas by query param' : 'WebGL context unavailable');
+    rendererRef.current?.destroy();
+    rendererRef.current = null;
+
+    if (mode === 'detail') {
+      rendererRef.current = buildDetailRenderer(host, callbacks, forceCanvas);
+      return () => {
+        rendererRef.current?.destroy();
+        rendererRef.current = null;
+      };
     }
 
-    rendererRef.current = renderer;
+    try {
+      const board = new BoardRenderer(callbacks);
+      board.init(host);
+      rendererRef.current = board;
+      setRendererBackend('board_canvas');
+      setRendererErrorCode('none');
+      setRendererError('');
+    } catch (error) {
+      const message = String(error);
+      rendererRef.current = buildDetailRenderer(host, callbacks, true);
+      setRendererErrorCode(classifyRendererError(message));
+      setRendererError(message);
+    }
 
     return () => {
       rendererRef.current?.destroy();
       rendererRef.current = null;
     };
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
     setVisibleMetrics(visible.nodes.length, visible.edges.length, visible.sampled);
@@ -402,12 +553,13 @@ export function App() {
 
   useEffect(() => {
     if (toast === '') return;
-    const timer = window.setTimeout(() => setToast(''), 2200);
+    const timer = window.setTimeout(() => setToast(''), 2400);
     return () => window.clearTimeout(timer);
   }, [toast, setToast]);
 
   useEffect(() => {
     if (bundle == null) return;
+
     const worker = new Worker(new URL('../workers/search.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = worker;
     worker.postMessage({
@@ -444,7 +596,7 @@ export function App() {
   }, [searchQuery]);
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
+    const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const isInput = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
 
@@ -470,9 +622,7 @@ export function App() {
       }
       if (event.key.toLowerCase() === 'f' && !isInput) {
         event.preventDefault();
-        if (selectedNodeId !== '') {
-          rendererRef.current?.focusNode(selectedNodeId, 0.45);
-        }
+        if (selectedNodeId !== '') rendererRef.current?.focusNode(selectedNodeId, 0.45);
         return;
       }
       if (event.key === 'Escape') {
@@ -481,31 +631,30 @@ export function App() {
       }
     };
 
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [goBack, goForward, selectedNodeId, setSearchQuery, setSearchResults, toggleCalls]);
 
   useEffect(() => {
     const renderer = rendererRef.current;
     if (renderer == null || viewModel == null) return;
 
-    let active = renderer;
     try {
-      active.render(renderFrame);
+      renderer.render(renderFrame);
     } catch (error) {
-      if (active.backend === 'webgl_sigma') {
-        const fallback = switchToCanvasFallback(String(error));
-        if (fallback == null) return;
-        active = fallback;
-        fallback.render(renderFrame);
-      } else {
-        setRendererError(String(error));
-        return;
+      const message = String(error);
+      setRendererErrorCode(classifyRendererError(message));
+      setRendererError(message);
+      if (mode === 'detail' && renderer.backend === 'webgl_sigma' && graphHostRef.current != null) {
+        const callbacks = rendererCallbacksRef.current ?? createRendererCallbacks();
+        rendererRef.current?.destroy();
+        rendererRef.current = buildDetailRenderer(graphHostRef.current, callbacks, true);
       }
+      return;
     }
 
     if (selectedNodeId !== '') {
-      const focused = active.focusNode(selectedNodeId, 0.45);
+      const focused = renderer.focusNode(selectedNodeId, 0.42);
       if (!focused && mode !== 'detail') {
         drillToDetail(selectedNodeId, 2);
       }
@@ -513,16 +662,16 @@ export function App() {
     }
 
     if (selectedClusterId !== '') {
-      active.focusNode(selectedClusterId, 0.7);
+      renderer.focusNode(selectedClusterId, 0.62);
       return;
     }
 
-    active.fit();
+    renderer.fit();
   }, [renderFrame, viewModel, selectedNodeId, selectedClusterId, mode, drillToDetail]);
 
   useEffect(() => {
     const canvas = minimapRef.current;
-    if (canvas == null) return;
+    if (canvas == null || mode !== 'detail') return;
     const ctx = canvas.getContext('2d');
     if (ctx == null) return;
 
@@ -537,7 +686,6 @@ export function App() {
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-
     for (const node of visible.nodes) {
       const x = Number(node.layout?.x ?? 0);
       const y = Number(node.layout?.y ?? 0);
@@ -549,7 +697,6 @@ export function App() {
 
     const spanX = Math.max(1, maxX - minX);
     const spanY = Math.max(1, maxY - minY);
-
     for (const node of visible.nodes) {
       const x = Number(node.layout?.x ?? 0);
       const y = Number(node.layout?.y ?? 0);
@@ -558,16 +705,17 @@ export function App() {
       ctx.fillStyle = node.id === selectedNodeId ? '#75ffd9' : '#5a87d7';
       ctx.fillRect(nx, ny, 2, 2);
     }
-
     ctx.strokeStyle = '#2f5aa0';
     ctx.strokeRect(1, 1, width - 2, height - 2);
-  }, [visible.nodes, selectedNodeId]);
+  }, [mode, visible.nodes, selectedNodeId]);
 
   const onSearchFocus = (item: SearchResultItem) => {
-    setSearchQuery(item.label);
+    const clusterId = nodeLookup.get(item.nodeId)?.clusterId ?? '';
+    if (mode === 'cluster' && clusterId !== '') {
+      drillToCluster(clusterId);
+    }
     selectNode(item.nodeId);
     setSearchIndex(Math.max(0, searchResults.findIndex((row) => row.nodeId === item.nodeId)));
-
     const focused = rendererRef.current?.focusNode(item.nodeId, 0.4) ?? false;
     if (!focused) {
       drillToDetail(item.nodeId, 2);
@@ -590,10 +738,6 @@ export function App() {
       return;
     }
     const entries = Object.values(viewModel.nodesById ?? {});
-    if (entries.length === 0) {
-      setToast('경로 계산 대상이 없습니다.');
-      return;
-    }
     const hub = entries
       .filter((item) => item.id !== selectedNodeId)
       .sort((a, b) => {
@@ -615,13 +759,19 @@ export function App() {
   };
 
   const jumpToHub = (nodeId: string) => {
-    if (!nodeId) return;
+    if (nodeId === '') return;
     selectNode(nodeId);
     const focused = rendererRef.current?.focusNode(nodeId, 0.4) ?? false;
     if (!focused) {
       drillToDetail(nodeId, 2);
     }
   };
+
+  const modeGuide = useMemo(() => {
+    if (mode === 'cluster') return '클러스터 카드를 클릭해 Structural로 들어가세요.';
+    if (mode === 'structural') return '카드를 클릭해 요약을 보고, 더블클릭으로 Detail(2-hop)로 이동하세요.';
+    return '선택 노드 기준으로 1-hop / 2-hop / paths를 분석하세요.';
+  }, [mode]);
 
   const breadcrumb = useMemo(() => {
     const parts = ['All'];
@@ -637,15 +787,14 @@ export function App() {
   useEffect(() => {
     let raf = 0;
     let frames = 0;
-    let windowStart = performance.now();
-
+    let startedAt = performance.now();
     const tick = (now: number) => {
       frames += 1;
-      const elapsed = now - windowStart;
+      const elapsed = now - startedAt;
       if (elapsed >= 1000) {
         setFps(Math.round((frames * 1000) / elapsed));
         frames = 0;
-        windowStart = now;
+        startedAt = now;
       }
       raf = window.requestAnimationFrame(tick);
     };
@@ -654,11 +803,14 @@ export function App() {
   }, []);
 
   const activeDiagnostic = useMemo(() => {
-    if (rendererBackend === 'canvas2d_fallback' && rendererError !== '') {
+    if (rendererError !== '' && rendererErrorCode !== 'none') {
+      const warningLevel = rendererBackend === 'canvas2d_fallback' ? 'warning' : 'error';
       return {
-        level: 'warning',
-        code: 'renderer_fallback',
-        message: 'WebGL 경로가 실패해 Canvas2D 폴백으로 동작 중입니다.',
+        level: warningLevel,
+        code: rendererErrorCode,
+        message: rendererBackend === 'canvas2d_fallback'
+          ? 'WebGL 경로가 실패해 Canvas2D 폴백으로 동작 중입니다.'
+          : '렌더러 오류가 발생했습니다.',
         hint: rendererError,
       };
     }
@@ -684,11 +836,11 @@ export function App() {
         level: String(first.level ?? 'warning'),
         code: String(first.code ?? 'runtime_diagnostic'),
         message: String(first.message ?? '런타임 진단 이슈가 감지되었습니다.'),
-        hint: String(first.hint ?? '원인 확인 후 점프 버튼으로 관련 노드를 탐색하세요.'),
+        hint: String(first.hint ?? '원인 확인 후 관련 노드로 이동하세요.'),
       };
     }
     return null;
-  }, [rendererBackend, rendererError, clusterLayoutHealth, visibleEdgeCount, runtimeDiagnostics]);
+  }, [rendererBackend, rendererError, rendererErrorCode, clusterLayoutHealth, visibleEdgeCount, runtimeDiagnostics]);
 
   return (
     <div className="app-shell">
@@ -711,8 +863,13 @@ export function App() {
           <option value="structural">Structural</option>
           <option value="detail">Detail</option>
         </select>
-        <label className="toggle"><input type="checkbox" checked={callsEnabled} onChange={() => toggleCalls()} /> Calls</label>
+        <label className="toggle">
+          <input type="checkbox" checked={callsEnabled} onChange={() => toggleCalls()} />
+          {' '}Calls
+        </label>
       </header>
+
+      <div className="mode-guide">{modeGuide}</div>
 
       <div className="kpi-strip">
         <span>Nodes {totalNodes.toLocaleString()}</span>
@@ -721,12 +878,12 @@ export function App() {
         <span>Visible {visibleNodeCount.toLocaleString()} / {totalNodes.toLocaleString()}</span>
         <span>Visible edges {visibleEdgeCount.toLocaleString()}</span>
         <span>FPS {fps}</span>
-        <span className="badge">Backend {rendererBackend === 'webgl_sigma' ? 'webgl' : 'canvas'}</span>
+        <span className="badge">Backend {rendererBackend.replace('_', ' ')}</span>
         {edgesSampled ? <span className="badge">Edges sampled</span> : null}
       </div>
 
       {activeDiagnostic != null ? (
-        <div className="diag-banner">
+        <div className={`diag-banner ${activeDiagnostic.level === 'error' ? 'critical' : ''}`}>
           <div>
             <strong>{activeDiagnostic.message}</strong>
             <div>{activeDiagnostic.hint}</div>
@@ -745,9 +902,16 @@ export function App() {
           <div className="breadcrumb">{breadcrumb.join(' > ')}</div>
           <div className="cluster-list">
             {clusterCards.map((cluster) => (
-              <button key={cluster.id} className={`cluster-card ${selectedClusterId === cluster.id ? 'active' : ''}`} onClick={() => selectCluster(cluster.id)} onDoubleClick={() => drillToCluster(cluster.id)}>
+              <button
+                key={cluster.id}
+                className={`cluster-card ${selectedClusterId === cluster.id ? 'active' : ''}`}
+                onClick={() => drillToCluster(cluster.id)}
+                onDoubleClick={() => drillToCluster(cluster.id)}
+              >
                 <div className="cluster-title">{cluster.label}</div>
-                <div className="cluster-meta">{cluster.size} nodes · ext {cluster.external.toFixed(0)} · hot {cluster.hot.toFixed(2)}</div>
+                <div className="cluster-meta">
+                  {cluster.size} nodes · ext {cluster.external.toFixed(0)} · hot {cluster.hot.toFixed(2)}
+                </div>
               </button>
             ))}
           </div>
@@ -755,7 +919,11 @@ export function App() {
           <div className="quick-filters">
             <div className="filter-row">
               <span className="filter-title">Cluster sort</span>
-              <select className="cluster-sort" value={clusterSort} onChange={(event) => setClusterSort(event.target.value as 'size' | 'external' | 'hot')}>
+              <select
+                className="cluster-sort"
+                value={clusterSort}
+                onChange={(event) => setClusterSort(event.target.value as 'size' | 'external' | 'hot')}
+              >
                 <option value="size">size</option>
                 <option value="external">external</option>
                 <option value="hot">hot</option>
@@ -764,7 +932,12 @@ export function App() {
             <div className="filter-title">Quick Filters</div>
             {Object.keys(edgeTypeEnabled).sort().map((edgeType) => (
               <label key={edgeType}>
-                <input type="checkbox" checked={Boolean(edgeTypeEnabled[edgeType])} onChange={() => toggleEdgeType(edgeType)} /> {edgeType}
+                <input
+                  type="checkbox"
+                  checked={Boolean(edgeTypeEnabled[edgeType])}
+                  onChange={() => toggleEdgeType(edgeType)}
+                />
+                {' '}{edgeType}
               </label>
             ))}
             <div className="filter-title">Hub Top5</div>
@@ -783,21 +956,33 @@ export function App() {
           <div ref={graphHostRef} className="graph-canvas" />
           {rendererBackend === 'canvas2d_fallback' && rendererError !== '' ? (
             <div className="graph-error">
-              <div className="graph-error-title">WebGL 초기화 실패</div>
-              <div className="graph-error-body">
-                WebGL 없이 2D 폴백 렌더로 표시 중입니다. 브라우저 하드웨어 가속/WebGL 설정을 확인하면 성능이 개선됩니다.
-              </div>
+              <div className="graph-error-title">WebGL 경로 실패</div>
+              <div className="graph-error-body">Canvas2D 폴백으로 동작 중입니다.</div>
               <code className="graph-error-code">{rendererError}</code>
             </div>
           ) : null}
-          <canvas ref={minimapRef} className="minimap" width={160} height={110} />
+          {mode === 'detail' ? <canvas ref={minimapRef} className="minimap" width={160} height={110} /> : null}
         </main>
 
         <aside className="right-panel">
           <h3>Detail Inspector</h3>
-          {selectedNode.id === '' ? (
-            <p className="muted">노드 또는 클러스터를 선택하면 요약이 표시됩니다.</p>
-          ) : (
+          {selectedNode.id === '' && selectedClusterSummary == null ? (
+            <div className="summary-card">
+              <div className="summary-title">Start here</div>
+              <div>1) 왼쪽 클러스터 클릭</div>
+              <div>2) 카드 클릭으로 요약 확인</div>
+              <div>3) 더블클릭으로 Detail 진입</div>
+            </div>
+          ) : null}
+          {selectedClusterSummary != null && selectedNode.id === '' ? (
+            <div className="summary-card">
+              <div className="summary-title">{selectedClusterSummary.title}</div>
+              <div>Nodes: {selectedClusterSummary.nodeCount}</div>
+              <div>External: {selectedClusterSummary.externalCount}</div>
+              <div>Hot: {selectedClusterSummary.hot.toFixed(2)}</div>
+            </div>
+          ) : null}
+          {selectedNode.id !== '' ? (
             <>
               <div className="summary-card">
                 <div className="summary-title">{selectedNode.label || selectedNode.id}</div>
@@ -812,10 +997,12 @@ export function App() {
                 <button onClick={() => selectedNodeId && drillToDetail(selectedNodeId, 3)}>3-hop</button>
                 <button onClick={onShowPaths}>Show paths</button>
               </div>
-              <button className="raw-toggle" onClick={toggleRawJson}>{rawJsonOpen ? 'Hide Raw JSON' : 'Show Raw JSON'}</button>
+              <button className="raw-toggle" onClick={toggleRawJson}>
+                {rawJsonOpen ? 'Hide Raw JSON' : 'Show Raw JSON'}
+              </button>
               {rawJsonOpen ? <pre className="raw-json">{JSON.stringify(selectedNode.metadata, null, 2)}</pre> : null}
             </>
-          )}
+          ) : null}
         </aside>
       </div>
 

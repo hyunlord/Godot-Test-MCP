@@ -71,6 +71,7 @@ class FakeVisualizerClient:
                         "cluster_edges": [],
                         "search_index": {"items": []},
                         "layouts": {},
+                        "board_model": {"clusters": [], "links": [], "hotspots": []},
                     }
                 ),
                 encoding="utf-8",
@@ -82,6 +83,7 @@ class FakeVisualizerClient:
                         "ui_version": 2,
                         "render_mode": "canvas_dom_hybrid",
                         "renderer_backend": "canvas2d_fallback",
+                        "renderer_error_code": "none",
                         "renderer_error": "",
                         "scale_profile": "large",
                     }
@@ -96,6 +98,7 @@ class FakeVisualizerClient:
                         "edgesById": {},
                         "layers": {"cluster": {}, "structural": {}, "detail": {}},
                         "ui_defaults": {"default_layer": "cluster"},
+                        "board_model": {"clusters": [], "links": [], "hotspots": []},
                         "cluster_layout_health": {
                             "overlap_count": 0,
                             "duplicate_anchor_count": 0,

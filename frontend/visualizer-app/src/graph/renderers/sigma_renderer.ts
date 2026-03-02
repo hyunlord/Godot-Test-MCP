@@ -1,4 +1,4 @@
-import Graph from 'graphology';
+import { MultiGraph } from 'graphology';
 import Sigma from 'sigma';
 
 import type { GraphRenderer, GraphRendererCallbacks, RenderFrame } from './types';
@@ -25,7 +25,7 @@ export class SigmaRenderer implements GraphRenderer {
       throw new Error('sigma renderer is not initialized');
     }
 
-    const graph = new Graph();
+    const graph = new MultiGraph();
     for (const node of frame.nodes) {
       graph.addNode(node.id, {
         x: node.x,
@@ -36,13 +36,33 @@ export class SigmaRenderer implements GraphRenderer {
       });
     }
 
+    const edgeGroups = new Map<string, { source: string; target: string; color: string; size: number; count: number }>();
     for (const edge of frame.edges) {
       if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue;
-      const key = edge.id || `${edge.source}->${edge.target}`;
-      if (graph.hasEdge(key)) continue;
-      graph.addEdgeWithKey(key, edge.source, edge.target, {
-        size: edge.size,
-        color: edge.color,
+      const key = `${edge.source}|${edge.target}|${edge.color}`;
+      const existing = edgeGroups.get(key);
+      if (existing == null) {
+        edgeGroups.set(key, {
+          source: edge.source,
+          target: edge.target,
+          color: edge.color,
+          size: edge.size,
+          count: 1,
+        });
+      } else {
+        existing.size += edge.size;
+        existing.count += 1;
+      }
+    }
+
+    let edgeIndex = 0;
+    for (const grouped of edgeGroups.values()) {
+      const key = `edge::${grouped.source}::${grouped.target}::${edgeIndex}`;
+      edgeIndex += 1;
+      graph.addEdgeWithKey(key, grouped.source, grouped.target, {
+        size: Math.min(6, Math.max(0.5, grouped.size / Math.max(1, grouped.count))),
+        color: grouped.color,
+        count: grouped.count,
       });
     }
 

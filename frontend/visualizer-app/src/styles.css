@@ -38,7 +38,7 @@ button { cursor: pointer; }
 
 .app-shell {
   display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
+  grid-template-rows: auto auto auto auto 1fr auto;
   height: 100%;
 }
 
@@ -91,6 +91,16 @@ button { cursor: pointer; }
   border-color: #2f7c63;
 }
 
+.mode-guide {
+  margin: 8px 12px 0;
+  border: 1px solid #314f87;
+  border-radius: 10px;
+  background: rgba(16, 31, 59, 0.9);
+  color: #d5e3ff;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
 .diag-banner {
   margin: 10px 12px;
   padding: 10px 12px;
@@ -101,6 +111,12 @@ button { cursor: pointer; }
   display: flex;
   justify-content: space-between;
   gap: 12px;
+}
+
+.diag-banner.critical {
+  border-color: #8f3646;
+  background: linear-gradient(90deg, #3f1722, #221015);
+  color: #ffd6df;
 }
 
 .diag-actions {
@@ -219,6 +235,7 @@ button { cursor: pointer; }
   inset: 0;
   width: 100%;
   height: 100%;
+  overflow: auto;
 }
 
 .graph-canvas > canvas,
@@ -228,6 +245,116 @@ button { cursor: pointer; }
   width: 100%;
   height: 100%;
   display: block;
+}
+
+.board-root {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.board-empty {
+  margin: 24px;
+  color: var(--muted);
+}
+
+.board-links {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.board-link {
+  fill: none;
+  stroke: rgba(102, 154, 246, 0.55);
+  stroke-linecap: round;
+}
+
+.board-cluster {
+  position: absolute;
+  border: 1px dashed rgba(120, 164, 245, 0.45);
+  background: linear-gradient(180deg, rgba(16, 31, 63, 0.82), rgba(13, 22, 46, 0.9));
+  border-radius: 14px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.board-cluster.is-selected {
+  border-color: #79ffd7;
+  box-shadow: 0 0 0 1px #79ffd760 inset, 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.board-cluster-header {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.board-cluster-header h4 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.board-cluster-header span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.board-cards {
+  position: absolute;
+  inset: 0;
+}
+
+.board-card {
+  position: absolute;
+  border: 1px solid rgba(88, 130, 208, 0.85);
+  background: linear-gradient(180deg, rgba(17, 30, 57, 0.98), rgba(10, 21, 42, 0.98));
+  border-radius: 10px;
+  text-align: left;
+  padding: 8px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.board-card strong {
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.board-card small {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.board-card.is-selected,
+.board-card.is-focused,
+.board-cluster.is-focused {
+  border-color: #79ffd7;
+  box-shadow: 0 0 0 1px #79ffd760 inset;
+}
+
+.board-more {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  font-size: 11px;
+  color: #a8b8df;
+  border: 1px solid rgba(77, 103, 156, 0.8);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: rgba(10, 21, 42, 0.9);
 }
 
 .graph-error {

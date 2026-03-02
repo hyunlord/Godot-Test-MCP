@@ -1148,12 +1148,14 @@ async def execute_scenario_pack(
                     and "summary" in diff_json
                     and "runtime_source" in meta_json
                     and "renderer_backend" in meta_json
+                    and "renderer_error_code" in meta_json
                     and "renderer_error" in meta_json
                     and "clusters" in view_model_json
                     and "nodesById" in view_model_json
                     and "layers" in view_model_json
                     and "ui_defaults" in view_model_json
                     and "cluster_layout_health" in view_model_json
+                    and "board_model" in view_model_json
                     and str(bundle_json.get("schema_version", "")).strip() != ""
                     and "nodes" in bundle_json
                     and "edges" in bundle_json
@@ -1162,6 +1164,7 @@ async def execute_scenario_pack(
                     and "cluster_edges" in bundle_json
                     and "search_index" in bundle_json
                     and "layouts" in bundle_json
+                    and "board_model" in bundle_json
                     and (assets_ok or assets_dir == "")
                 )
                 base["result"] = "PASS" if (len(missing_paths) == 0 and schema_ok) else "FAIL"

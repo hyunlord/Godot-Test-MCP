@@ -1,6 +1,6 @@
 import type { VisualizerMode } from '../../types/visualizer';
 
-export type RendererBackend = 'webgl_sigma' | 'canvas2d_fallback';
+export type RendererBackend = 'board_canvas' | 'webgl_sigma' | 'canvas2d_fallback';
 
 export interface RenderNode {
   id: string;
@@ -24,6 +24,35 @@ export interface RenderFrame {
   nodes: RenderNode[];
   edges: RenderEdge[];
   mode: VisualizerMode;
+  board?: {
+    clusters: Array<{
+      id: string;
+      title: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      summary: { nodeCount: number; externalCount: number; hot: number };
+      cards: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        stats: { inDegree: number; outDegree: number; loc: number };
+      }>;
+      hiddenCards: number;
+    }>;
+    links: Array<{
+      sourceClusterId: string;
+      targetClusterId: string;
+      count: number;
+    }>;
+  };
+  selectedNodeId?: string;
+  selectedClusterId?: string;
 }
 
 export interface GraphRendererCallbacks {

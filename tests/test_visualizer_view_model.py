@@ -72,6 +72,11 @@ def test_view_model_builder_generates_stats_and_adjacency() -> None:
     assert "cluster_layout_health" in vm
     assert vm["cluster_layout_health"]["overlap_count"] == 0
     assert vm["cluster_layout_health"]["duplicate_anchor_count"] == 0
+    assert "board_model" in vm
+    assert "clusters" in vm["board_model"]
+    assert "links" in vm["board_model"]
+    assert "hotspots" in vm["board_model"]
+    assert vm["board_model"]["clusters"][0]["cards"]
     assert "layers" in vm
     assert "cluster" in vm["layers"]
     assert "structural" in vm["layers"]
