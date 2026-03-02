@@ -1147,10 +1147,13 @@ async def execute_scenario_pack(
                     and "links" in causality_json
                     and "summary" in diff_json
                     and "runtime_source" in meta_json
+                    and "renderer_backend" in meta_json
+                    and "renderer_error" in meta_json
                     and "clusters" in view_model_json
                     and "nodesById" in view_model_json
                     and "layers" in view_model_json
                     and "ui_defaults" in view_model_json
+                    and "cluster_layout_health" in view_model_json
                     and str(bundle_json.get("schema_version", "")).strip() != ""
                     and "nodes" in bundle_json
                     and "edges" in bundle_json

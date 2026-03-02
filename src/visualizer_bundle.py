@@ -207,6 +207,7 @@ class VisualizerBundleBuilder:
             "causality": causality_payload,
             "diff": diff_payload,
             "ui_defaults": view_model.get("ui_defaults", {}),
+            "cluster_layout_health": view_model.get("cluster_layout_health", {}),
         }
 
     def _layout_positions(self, *, view_model: dict[str, Any], layer_name: str) -> dict[str, Any]:

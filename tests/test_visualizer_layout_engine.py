@@ -48,3 +48,19 @@ def test_layout_engine_normalizes_cluster_origin_and_keeps_relative_node_spacing
     dx = positions["func::2"]["x"] - positions["func::1"]["x"]
     assert dx > 0
     assert positions["func::1"]["y"] == positions["func::2"]["y"]
+
+
+def test_layout_engine_avoids_duplicate_cluster_anchors_after_wrap() -> None:
+    engine = VisualizerLayoutEngine()
+    nodes = []
+    for index in range(20):
+        category = f"cat_{index:02d}"
+        nodes.append({"id": f"file::{index}:a", "label": f"{category}_a.gd", "kind": "file", "folder_category": category})
+        nodes.append({"id": f"file::{index}:b", "label": f"{category}_b.gd", "kind": "file", "folder_category": category})
+
+    payload = engine.build(nodes=nodes, edges=[])
+    clusters = payload["clusters"]
+    anchors = {(float(cluster["x"]), float(cluster["y"])) for cluster in clusters}
+
+    assert len(clusters) == len(anchors)
+    assert max(float(cluster["y"]) for cluster in clusters) > 40.0

@@ -141,6 +141,8 @@ class VisualizerService:
             "raw_probe": raw_probe,
             "ui_version": 2,
             "render_mode": "webgl_sigma",
+            "renderer_backend": "webgl_sigma",
+            "renderer_error": "",
             "scale_profile": "large",
             "render_profile": "overview_first",
             "warnings": diff_payload.get("warnings", []),

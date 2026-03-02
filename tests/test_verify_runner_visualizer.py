@@ -81,6 +81,8 @@ class FakeVisualizerClient:
                         "runtime_source": "fallback",
                         "ui_version": 2,
                         "render_mode": "canvas_dom_hybrid",
+                        "renderer_backend": "canvas2d_fallback",
+                        "renderer_error": "",
                         "scale_profile": "large",
                     }
                 ),
@@ -94,6 +96,11 @@ class FakeVisualizerClient:
                         "edgesById": {},
                         "layers": {"cluster": {}, "structural": {}, "detail": {}},
                         "ui_defaults": {"default_layer": "cluster"},
+                        "cluster_layout_health": {
+                            "overlap_count": 0,
+                            "duplicate_anchor_count": 0,
+                            "max_density_band": "2",
+                        },
                     }
                 ),
                 encoding="utf-8",

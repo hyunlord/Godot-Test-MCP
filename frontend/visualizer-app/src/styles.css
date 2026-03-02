@@ -184,14 +184,85 @@ button { cursor: pointer; }
   font-weight: 600;
 }
 
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cluster-sort {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.hub-list {
+  display: grid;
+  gap: 6px;
+}
+
+.hub-item {
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .canvas-panel {
   position: relative;
   overflow: hidden;
 }
 
 .graph-canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.graph-canvas > canvas,
+.graph-canvas-fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.graph-error {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 16px;
+  z-index: 6;
+  border: 1px solid #7c3f42;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(61, 25, 31, 0.94), rgba(28, 13, 18, 0.95));
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.graph-error-title {
+  color: #ffd0d7;
+  font-weight: 700;
+}
+
+.graph-error-body {
+  color: #f7c8cf;
+  font-size: 13px;
+}
+
+.graph-error-code {
+  color: #ffcfd2;
+  border: 1px solid #7c3f42;
+  border-radius: 8px;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .minimap {

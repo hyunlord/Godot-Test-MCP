@@ -69,6 +69,9 @@ def test_view_model_builder_generates_stats_and_adjacency() -> None:
     assert "file::a" in vm["adjacency"]["out"]
     assert vm["filters"]["languages"] == ["gdscript"]
     assert vm["ui_defaults"]["default_layer"] == "cluster"
+    assert "cluster_layout_health" in vm
+    assert vm["cluster_layout_health"]["overlap_count"] == 0
+    assert vm["cluster_layout_health"]["duplicate_anchor_count"] == 0
     assert "layers" in vm
     assert "cluster" in vm["layers"]
     assert "structural" in vm["layers"]

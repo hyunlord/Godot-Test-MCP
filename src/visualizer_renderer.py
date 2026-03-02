@@ -53,6 +53,8 @@ class VisualizerRenderer:
         meta.setdefault("locale", locale)
         meta.setdefault("ui_version", 2)
         meta.setdefault("render_mode", "webgl_sigma")
+        meta.setdefault("renderer_backend", "webgl_sigma")
+        meta.setdefault("renderer_error", "")
         meta.setdefault("scale_profile", "large")
         warnings = meta.get("warnings", [])
         if not isinstance(warnings, list):

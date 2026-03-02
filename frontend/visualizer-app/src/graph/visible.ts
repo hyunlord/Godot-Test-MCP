@@ -68,8 +68,10 @@ export function buildVisibleGraph(args: {
   const rootNodes = viewModel.nodesById ?? {};
   const rootEdges = viewModel.edgesById ?? {};
 
-  const layerNodesById = layer?.nodesById ?? rootNodes;
-  const layerEdgesById = layer?.edgesById ?? rootEdges;
+  const layerNodesById =
+    layer?.nodesById && Object.keys(layer.nodesById).length > 0 ? layer.nodesById : rootNodes;
+  const layerEdgesById =
+    layer?.edgesById && Object.keys(layer.edgesById).length > 0 ? layer.edgesById : rootEdges;
 
   let nodeIds = Array.isArray(layer?.node_ids) ? [...layer.node_ids] : Object.keys(layerNodesById);
   let edgeIds = Array.isArray(layer?.edge_ids) ? [...layer.edge_ids] : Object.keys(layerEdgesById);

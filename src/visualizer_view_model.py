@@ -107,6 +107,7 @@ class VisualizerViewModelBuilder:
             node_positions=node_positions,
             cluster_key_by_id=cluster_key_by_id,
         )
+        cluster_layout_health = self._cluster_layout_health(cluster_layer)
         structural_layer = self._build_structural_layer(
             nodes_by_id=nodes_by_id,
             edges_by_id=edges_by_id,
@@ -146,6 +147,7 @@ class VisualizerViewModelBuilder:
                 "structural": structural_layer,
                 "detail": detail_layer,
             },
+            "cluster_layout_health": cluster_layout_health,
             "ui_defaults": {
                 "default_layer": normalized_default_layer,
                 "hidden_edge_types": ["calls"],
@@ -212,15 +214,38 @@ class VisualizerViewModelBuilder:
         node_positions: dict[str, dict[str, float]],
         cluster_key_by_id: dict[str, str],
     ) -> dict[str, Any]:
+        min_cluster_gap = 24.0
         nodes_by_id: dict[str, dict[str, Any]] = {}
-        for cluster in clusters:
+        occupied_rects: list[dict[str, float]] = []
+        sorted_clusters = sorted(
+            [item for item in clusters if isinstance(item, dict)],
+            key=lambda item: (float(item.get("y", 0.0)), float(item.get("x", 0.0))),
+        )
+
+        for cluster in sorted_clusters:
             cluster_id = str(cluster.get("id", ""))
             if cluster_id == "":
                 continue
-            width = max(280.0, min(520.0, float(cluster.get("w", 320.0)) * 0.44))
+
+            base_w = float(cluster.get("w", 320.0))
+            width = max(260.0, min(720.0, base_w - 32.0))
+            if width <= 0.0:
+                width = 320.0
             height = 116.0
-            x = float(cluster.get("x", 0.0)) + max(0.0, (float(cluster.get("w", 0.0)) - width) / 2.0)
-            y = float(cluster.get("y", 0.0)) + 20.0
+            x = float(cluster.get("x", 0.0)) + 16.0
+            y = float(cluster.get("y", 0.0)) + 16.0
+
+            while self._rect_overlaps_any(
+                x=x,
+                y=y,
+                w=width,
+                h=height,
+                existing=occupied_rects,
+                gap=min_cluster_gap,
+            ):
+                y += height + min_cluster_gap
+            occupied_rects.append({"x": x, "y": y, "w": width, "h": height})
+
             nodes_by_id[cluster_id] = {
                 "id": cluster_id,
                 "kind": "cluster",
@@ -232,6 +257,7 @@ class VisualizerViewModelBuilder:
                 "metadata": {
                     "cluster_key": str(cluster.get("key", "")),
                     "node_count": int(cluster.get("node_count", 0)),
+                    "band": int(cluster.get("band", -1)),
                 },
                 "layout": {
                     "x": x,
@@ -300,6 +326,52 @@ class VisualizerViewModelBuilder:
             "nodesById": nodes_by_id,
             "edgesById": edges_by_id,
             "adjacency": adjacency,
+        }
+
+    def _cluster_layout_health(self, cluster_layer: dict[str, Any]) -> dict[str, Any]:
+        nodes_by_id = (
+            cluster_layer.get("nodesById", {})
+            if isinstance(cluster_layer.get("nodesById", {}), dict)
+            else {}
+        )
+        anchors: dict[tuple[float, float], int] = {}
+        overlap_count = 0
+        band_density: Counter[str] = Counter()
+
+        entries = [item for item in nodes_by_id.values() if isinstance(item, dict)]
+        for node in entries:
+            layout = node.get("layout", {}) if isinstance(node.get("layout", {}), dict) else {}
+            x = round(float(layout.get("x", 0.0)), 3)
+            y = round(float(layout.get("y", 0.0)), 3)
+            anchors[(x, y)] = anchors.get((x, y), 0) + 1
+            metadata = node.get("metadata", {}) if isinstance(node.get("metadata", {}), dict) else {}
+            band = str(metadata.get("band", "unknown"))
+            band_density[band] += int(metadata.get("node_count", 0))
+
+        for index, source in enumerate(entries):
+            source_layout = source.get("layout", {}) if isinstance(source.get("layout", {}), dict) else {}
+            sx = float(source_layout.get("x", 0.0))
+            sy = float(source_layout.get("y", 0.0))
+            sw = float(source_layout.get("w", 0.0))
+            sh = float(source_layout.get("h", 0.0))
+            for target in entries[index + 1 :]:
+                target_layout = target.get("layout", {}) if isinstance(target.get("layout", {}), dict) else {}
+                tx = float(target_layout.get("x", 0.0))
+                ty = float(target_layout.get("y", 0.0))
+                tw = float(target_layout.get("w", 0.0))
+                th = float(target_layout.get("h", 0.0))
+                if self._rects_overlap(sx, sy, sw, sh, tx, ty, tw, th, gap=0.0):
+                    overlap_count += 1
+
+        duplicate_anchor_count = sum(max(0, count - 1) for count in anchors.values())
+        max_density_band = "unknown"
+        if len(band_density) > 0:
+            max_density_band = max(band_density.items(), key=lambda item: item[1])[0]
+
+        return {
+            "overlap_count": int(overlap_count),
+            "duplicate_anchor_count": int(duplicate_anchor_count),
+            "max_density_band": max_density_band,
         }
 
     def _build_structural_layer(
@@ -444,3 +516,48 @@ class VisualizerViewModelBuilder:
             "tx": tx,
             "ty": ty,
         }
+
+    def _rect_overlaps_any(
+        self,
+        *,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        existing: list[dict[str, float]],
+        gap: float,
+    ) -> bool:
+        for rect in existing:
+            if self._rects_overlap(
+                x,
+                y,
+                w,
+                h,
+                float(rect.get("x", 0.0)),
+                float(rect.get("y", 0.0)),
+                float(rect.get("w", 0.0)),
+                float(rect.get("h", 0.0)),
+                gap=gap,
+            ):
+                return True
+        return False
+
+    def _rects_overlap(
+        self,
+        x1: float,
+        y1: float,
+        w1: float,
+        h1: float,
+        x2: float,
+        y2: float,
+        w2: float,
+        h2: float,
+        *,
+        gap: float,
+    ) -> bool:
+        return not (
+            x1 + w1 + gap <= x2
+            or x2 + w2 + gap <= x1
+            or y1 + h1 + gap <= y2
+            or y2 + h2 + gap <= y1
+        )

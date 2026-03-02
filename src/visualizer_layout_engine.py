@@ -103,11 +103,13 @@ class VisualizerLayoutEngine:
         gap_x = 22.0
         gap_y = 16.0
         pad = 20.0
+        row_gap = 30.0
 
         max_width = 3600.0
         band_y_base = {0: 40.0, 1: 700.0, 2: 1360.0}
         band_cursor_x = {0: 40.0, 1: 40.0, 2: 40.0}
         band_row_h = {0: 0.0, 1: 0.0, 2: 0.0}
+        band_current_y = {0: 40.0, 1: 700.0, 2: 1360.0}
 
         laid_out: list[dict[str, Any]] = []
         for cluster in clusters:
@@ -120,10 +122,11 @@ class VisualizerLayoutEngine:
 
             band = int(cluster["band"])
             x = band_cursor_x[band]
-            y = band_y_base[band]
-            if x + width > max_width:
+            y = band_current_y[band]
+            if x + width > max_width and x > 40.0:
+                band_current_y[band] = band_current_y[band] + band_row_h[band] + row_gap
                 x = 40.0
-                y = band_y_base[band] + band_row_h[band] + 30.0
+                y = band_current_y[band]
                 band_cursor_x[band] = x
                 band_row_h[band] = 0.0
 

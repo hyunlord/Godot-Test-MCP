@@ -52,6 +52,11 @@ export interface GraphBundle {
     collapsed_kinds?: string[];
     focus_cluster?: string;
   };
+  cluster_layout_health?: {
+    overlap_count?: number;
+    duplicate_anchor_count?: number;
+    max_density_band?: string;
+  };
 }
 
 export interface ViewModelNode {
@@ -92,6 +97,11 @@ export interface ViewModel {
     default_layer?: VisualizerMode;
     hidden_edge_types?: string[];
     focus_cluster?: string;
+  };
+  cluster_layout_health?: {
+    overlap_count?: number;
+    duplicate_anchor_count?: number;
+    max_density_band?: string;
   };
 }
 
