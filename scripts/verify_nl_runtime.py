@@ -1076,6 +1076,8 @@ async def execute_scenario_pack(
                     "baseline_run_id": str(scenario.get("baseline_run_id", "")),
                     "open": False,
                     "locale": str(scenario.get("locale", "ko")),
+                    "default_layer": str(scenario.get("default_layer", "cluster")),
+                    "focus_cluster": str(scenario.get("focus_cluster", "")),
                 },
             )
             runtime_context["visualizer_map_payload"] = payload
@@ -1092,6 +1094,7 @@ async def execute_scenario_pack(
                     str(artifacts.get("diff_path", "")),
                     str(artifacts.get("meta_path", "")),
                     str(artifacts.get("view_model_path", "")),
+                    str(artifacts.get("bundle_path", "")),
                     str(artifacts.get("html_path", "")),
                     str(artifacts.get("js_path", "")),
                     str(artifacts.get("css_path", "")),
@@ -1105,6 +1108,7 @@ async def execute_scenario_pack(
                 diff_json = {}
                 meta_json = {}
                 view_model_json = {}
+                bundle_json = {}
                 try:
                     if str(artifacts.get("map_path", "")).strip() != "":
                         map_json = load_json(Path(str(artifacts.get("map_path"))))
@@ -1118,12 +1122,23 @@ async def execute_scenario_pack(
                         meta_json = load_json(Path(str(artifacts.get("meta_path"))))
                     if str(artifacts.get("view_model_path", "")).strip() != "":
                         view_model_json = load_json(Path(str(artifacts.get("view_model_path"))))
+                    if str(artifacts.get("bundle_path", "")).strip() != "":
+                        bundle_json = load_json(Path(str(artifacts.get("bundle_path"))))
                 except Exception as exc:
                     base["result"] = "FAIL"
                     base["reason"] = f"visualizer artifact parse failed: {exc}"
                     base["details"] = payload
                     results.append(base)
                     continue
+
+                assets_dir = str(artifacts.get("assets_dir", "")).strip()
+                assets_ok = False
+                if assets_dir != "":
+                    assets_path = Path(assets_dir)
+                    if assets_path.is_dir():
+                        has_js = any(assets_path.glob("*.js"))
+                        has_css = any(assets_path.glob("*.css"))
+                        assets_ok = has_js and has_css
 
                 schema_ok = (
                     "nodes" in map_json
@@ -1134,6 +1149,17 @@ async def execute_scenario_pack(
                     and "runtime_source" in meta_json
                     and "clusters" in view_model_json
                     and "nodesById" in view_model_json
+                    and "layers" in view_model_json
+                    and "ui_defaults" in view_model_json
+                    and str(bundle_json.get("schema_version", "")).strip() != ""
+                    and "nodes" in bundle_json
+                    and "edges" in bundle_json
+                    and "calls_edges" in bundle_json
+                    and "clusters" in bundle_json
+                    and "cluster_edges" in bundle_json
+                    and "search_index" in bundle_json
+                    and "layouts" in bundle_json
+                    and (assets_ok or assets_dir == "")
                 )
                 base["result"] = "PASS" if (len(missing_paths) == 0 and schema_ok) else "FAIL"
                 base["reason"] = "visualizer artifacts validated" if base["result"] == "PASS" else "visualizer contract failed"
@@ -1142,6 +1168,8 @@ async def execute_scenario_pack(
                     "existing_paths": existing_paths,
                     "missing_paths": missing_paths,
                     "schema_ok": schema_ok,
+                    "assets_ok": assets_ok,
+                    "assets_dir": assets_dir,
                 }
 
         elif kind == "visualizer_diff_contract":

@@ -1,0 +1,25 @@
+{
+  "name": "godot-visualizer-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "graphology": "^0.26.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sigma": "^3.0.0",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0"
+  }
+}

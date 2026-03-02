@@ -43,16 +43,21 @@ def test_renderer_writes_view_model_and_offline(tmp_path) -> None:
     )
 
     view_model_path = tmp_path / ".godot-test-mcp" / "runs" / "run-1" / "visualizer" / "view_model.json"
+    bundle_path = tmp_path / ".godot-test-mcp" / "runs" / "run-1" / "visualizer" / "graph.bundle.json"
     offline_path = tmp_path / ".godot-test-mcp" / "runs" / "run-1" / "visualizer" / "offline.html"
     index_path = tmp_path / ".godot-test-mcp" / "runs" / "run-1" / "visualizer" / "index.html"
 
     assert view_model_path.is_file()
+    assert bundle_path.is_file()
     assert offline_path.is_file()
     assert index_path.is_file()
 
     vm = json.loads(view_model_path.read_text(encoding="utf-8"))
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
     assert "clusters" in vm
     assert "nodesById" in vm
+    assert bundle["schema_version"] == "1.0"
+    assert "calls_edges" in bundle
 
     html = offline_path.read_text(encoding="utf-8")
     assert "Godot Visualizer Offline Snapshot" in html
@@ -65,4 +70,5 @@ def test_renderer_writes_view_model_and_offline(tmp_path) -> None:
     assert "\"runtime_diagnostics\"" in index_html
 
     assert artifacts.view_model_path.endswith("view_model.json")
+    assert artifacts.bundle_path.endswith("graph.bundle.json")
     assert artifacts.offline_html_path.endswith("offline.html")

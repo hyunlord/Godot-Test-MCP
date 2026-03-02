@@ -24,6 +24,8 @@ class VisualizerViewModelBuilder:
         timeline_payload: dict[str, Any],
         causality_payload: dict[str, Any],
         diff_payload: dict[str, Any],
+        default_layer: str = "cluster",
+        focus_cluster: str = "",
     ) -> dict[str, Any]:
         nodes = map_payload.get("nodes", []) if isinstance(map_payload.get("nodes", []), list) else []
         edges = map_payload.get("edges", []) if isinstance(map_payload.get("edges", []), list) else []
@@ -31,6 +33,15 @@ class VisualizerViewModelBuilder:
         layout = self._layout.build(nodes=nodes, edges=edges)
         node_positions = layout["node_positions"]
         edge_layouts = layout["edge_layouts"]
+        cluster_key_by_id = {
+            str(cluster.get("id", "")): str(cluster.get("key", ""))
+            for cluster in layout.get("clusters", [])
+            if isinstance(cluster, dict)
+        }
+        node_cluster_key: dict[str, str] = {}
+        for node_id, position in node_positions.items():
+            cluster_id = str(position.get("cluster_id", ""))
+            node_cluster_key[str(node_id)] = cluster_key_by_id.get(cluster_id, "")
 
         in_degree: Counter[str] = Counter()
         out_degree: Counter[str] = Counter()
@@ -90,6 +101,32 @@ class VisualizerViewModelBuilder:
 
         adjacency = self._build_adjacency(edge_layouts)
         spatial_index = self._policy.build_spatial_index(node_positions=node_positions)
+        cluster_layer = self._build_cluster_layer(
+            clusters=layout.get("clusters", []),
+            edge_layouts=edge_layouts,
+            node_positions=node_positions,
+            cluster_key_by_id=cluster_key_by_id,
+        )
+        structural_layer = self._build_structural_layer(
+            nodes_by_id=nodes_by_id,
+            edges_by_id=edges_by_id,
+            focus_cluster=focus_cluster,
+            node_cluster_key=node_cluster_key,
+        )
+        detail_layer = self._build_detail_layer(
+            nodes_by_id=nodes_by_id,
+            edges_by_id=edges_by_id,
+            focus_cluster=focus_cluster,
+            node_cluster_key=node_cluster_key,
+        )
+        cluster_metrics = self._build_cluster_metrics(
+            clusters=layout.get("clusters", []),
+            edge_layouts=edge_layouts,
+            cluster_key_by_id=cluster_key_by_id,
+            node_cluster_key=node_cluster_key,
+            nodes_by_id=nodes_by_id,
+        )
+        normalized_default_layer = default_layer if default_layer in {"cluster", "structural", "detail"} else "cluster"
 
         node_count = max(1, len(nodes_by_id))
         edge_count = len(edges_by_id)
@@ -104,6 +141,18 @@ class VisualizerViewModelBuilder:
             "edgesById": edges_by_id,
             "adjacency": adjacency,
             "spatialIndex": spatial_index,
+            "layers": {
+                "cluster": cluster_layer,
+                "structural": structural_layer,
+                "detail": detail_layer,
+            },
+            "ui_defaults": {
+                "default_layer": normalized_default_layer,
+                "hidden_edge_types": ["calls"],
+                "collapsed_kinds": ["function"],
+                "focus_cluster": focus_cluster.strip().lower(),
+            },
+            "cluster_metrics": cluster_metrics,
             "timeline": timeline_payload,
             "causality": causality_payload,
             "diff": diff_payload,
@@ -154,3 +203,244 @@ class VisualizerViewModelBuilder:
         if not isinstance(items, list):
             return []
         return [str(item) for item in items if str(item).strip() != ""]
+
+    def _build_cluster_layer(
+        self,
+        *,
+        clusters: list[dict[str, Any]],
+        edge_layouts: list[dict[str, Any]],
+        node_positions: dict[str, dict[str, float]],
+        cluster_key_by_id: dict[str, str],
+    ) -> dict[str, Any]:
+        nodes_by_id: dict[str, dict[str, Any]] = {}
+        for cluster in clusters:
+            cluster_id = str(cluster.get("id", ""))
+            if cluster_id == "":
+                continue
+            width = max(280.0, min(520.0, float(cluster.get("w", 320.0)) * 0.44))
+            height = 116.0
+            x = float(cluster.get("x", 0.0)) + max(0.0, (float(cluster.get("w", 0.0)) - width) / 2.0)
+            y = float(cluster.get("y", 0.0)) + 20.0
+            nodes_by_id[cluster_id] = {
+                "id": cluster_id,
+                "kind": "cluster",
+                "label": str(cluster.get("title", cluster_id)),
+                "path": f"cluster://{str(cluster.get('key', ''))}",
+                "language": "meta",
+                "folder_category": str(cluster.get("key", "")),
+                "loc": int(cluster.get("node_count", 0)),
+                "metadata": {
+                    "cluster_key": str(cluster.get("key", "")),
+                    "node_count": int(cluster.get("node_count", 0)),
+                },
+                "layout": {
+                    "x": x,
+                    "y": y,
+                    "w": width,
+                    "h": height,
+                    "cluster_id": cluster_id,
+                },
+                "metrics": {"in_degree": 0, "out_degree": 0, "loc": int(cluster.get("node_count", 0))},
+                "diff_state": "unchanged",
+            }
+
+        edge_groups: dict[str, dict[str, Any]] = {}
+        for edge in edge_layouts:
+            source_id = str(edge.get("source", ""))
+            target_id = str(edge.get("target", ""))
+            src_cluster_id = str(node_positions.get(source_id, {}).get("cluster_id", ""))
+            dst_cluster_id = str(node_positions.get(target_id, {}).get("cluster_id", ""))
+            if src_cluster_id == "" or dst_cluster_id == "" or src_cluster_id == dst_cluster_id:
+                continue
+            group_key = f"{src_cluster_id}->{dst_cluster_id}"
+            entry = edge_groups.setdefault(
+                group_key,
+                {
+                    "source": src_cluster_id,
+                    "target": dst_cluster_id,
+                    "count": 0,
+                    "edge_types": Counter(),
+                },
+            )
+            entry["count"] += 1
+            entry["edge_types"][str(edge.get("edge_type", "unknown"))] += 1
+
+        edges_by_id: dict[str, dict[str, Any]] = {}
+        for idx, entry in enumerate(edge_groups.values()):
+            source = str(entry["source"])
+            target = str(entry["target"])
+            source_node = nodes_by_id.get(source)
+            target_node = nodes_by_id.get(target)
+            if source_node is None or target_node is None:
+                continue
+            points = self._edge_points_from_layout(source_node["layout"], target_node["layout"])
+            edge_id = f"cluster_edge::{idx}"
+            edges_by_id[edge_id] = {
+                "id": edge_id,
+                "source": source,
+                "target": target,
+                "edge_type": "cluster_link",
+                "confidence": 1.0,
+                "inferred": False,
+                "points": points,
+                "bundle_key": f"{source}->{target}",
+                "metadata": {
+                    "count": int(entry["count"]),
+                    "edge_types": dict(entry["edge_types"]),
+                    "source_cluster_key": cluster_key_by_id.get(source, ""),
+                    "target_cluster_key": cluster_key_by_id.get(target, ""),
+                },
+                "diff_state": "unchanged",
+            }
+
+        adjacency = self._build_adjacency(list(edges_by_id.values()))
+        return {
+            "node_ids": sorted(nodes_by_id.keys()),
+            "edge_ids": sorted(edges_by_id.keys()),
+            "nodesById": nodes_by_id,
+            "edgesById": edges_by_id,
+            "adjacency": adjacency,
+        }
+
+    def _build_structural_layer(
+        self,
+        *,
+        nodes_by_id: dict[str, dict[str, Any]],
+        edges_by_id: dict[str, dict[str, Any]],
+        focus_cluster: str,
+        node_cluster_key: dict[str, str],
+    ) -> dict[str, Any]:
+        allowed_kinds = {
+            "file",
+            "class",
+            "signal",
+            "system",
+            "entity",
+            "event",
+            "node",
+            "visual_node",
+            "error",
+            "warning",
+            "cluster",
+        }
+        focus = focus_cluster.strip().lower()
+        node_ids: list[str] = []
+        for node_id, node in nodes_by_id.items():
+            kind = str(node.get("kind", ""))
+            if kind not in allowed_kinds:
+                continue
+            if focus != "" and node_cluster_key.get(node_id, "") != focus:
+                continue
+            node_ids.append(node_id)
+        node_set = set(node_ids)
+        edge_ids = [
+            edge_id
+            for edge_id, edge in edges_by_id.items()
+            if str(edge.get("source", "")) in node_set
+            and str(edge.get("target", "")) in node_set
+            and str(edge.get("edge_type", "")) != "calls"
+        ]
+        return {
+            "node_ids": sorted(node_ids),
+            "edge_ids": sorted(edge_ids),
+            "adjacency": self._build_adjacency([edges_by_id[item] for item in edge_ids]),
+        }
+
+    def _build_detail_layer(
+        self,
+        *,
+        nodes_by_id: dict[str, dict[str, Any]],
+        edges_by_id: dict[str, dict[str, Any]],
+        focus_cluster: str,
+        node_cluster_key: dict[str, str],
+    ) -> dict[str, Any]:
+        focus = focus_cluster.strip().lower()
+        if focus == "":
+            node_ids = sorted(nodes_by_id.keys())
+        else:
+            node_ids = sorted([node_id for node_id in nodes_by_id if node_cluster_key.get(node_id, "") == focus])
+            if len(node_ids) == 0:
+                node_ids = sorted(nodes_by_id.keys())
+        node_set = set(node_ids)
+        edge_ids = sorted(
+            [
+                edge_id
+                for edge_id, edge in edges_by_id.items()
+                if str(edge.get("source", "")) in node_set and str(edge.get("target", "")) in node_set
+            ]
+        )
+        return {
+            "node_ids": node_ids,
+            "edge_ids": edge_ids,
+            "adjacency": self._build_adjacency([edges_by_id[item] for item in edge_ids]),
+        }
+
+    def _build_cluster_metrics(
+        self,
+        *,
+        clusters: list[dict[str, Any]],
+        edge_layouts: list[dict[str, Any]],
+        cluster_key_by_id: dict[str, str],
+        node_cluster_key: dict[str, str],
+        nodes_by_id: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        edge_counts: Counter[str] = Counter()
+        for edge in edge_layouts:
+            source = str(edge.get("source", ""))
+            target = str(edge.get("target", ""))
+            source_key = node_cluster_key.get(source, "")
+            target_key = node_cluster_key.get(target, "")
+            if source_key:
+                edge_counts[source_key] += 1
+            if target_key and target_key != source_key:
+                edge_counts[target_key] += 1
+
+        function_counts: Counter[str] = Counter()
+        for node_id, node in nodes_by_id.items():
+            if str(node.get("kind", "")) != "function":
+                continue
+            cluster_key = node_cluster_key.get(node_id, "")
+            if cluster_key:
+                function_counts[cluster_key] += 1
+
+        metrics: list[dict[str, Any]] = []
+        for cluster in clusters:
+            cluster_id = str(cluster.get("id", ""))
+            cluster_key = cluster_key_by_id.get(cluster_id, str(cluster.get("key", "")))
+            node_count = int(cluster.get("node_count", 0))
+            function_count = int(function_counts.get(cluster_key, 0))
+            edge_count = int(edge_counts.get(cluster_key, 0))
+            hotspot_score = float(function_count * 2 + edge_count + node_count * 0.25)
+            metrics.append(
+                {
+                    "key": cluster_key,
+                    "node_count": node_count,
+                    "function_count": function_count,
+                    "edge_count": edge_count,
+                    "hotspot_score": hotspot_score,
+                }
+            )
+        metrics.sort(key=lambda item: item["hotspot_score"], reverse=True)
+        return metrics
+
+    def _edge_points_from_layout(
+        self,
+        source_layout: dict[str, Any],
+        target_layout: dict[str, Any],
+    ) -> dict[str, float]:
+        sx = float(source_layout.get("x", 0.0)) + float(source_layout.get("w", 0.0)) / 2.0
+        sy = float(source_layout.get("y", 0.0)) + float(source_layout.get("h", 0.0)) / 2.0
+        tx = float(target_layout.get("x", 0.0)) + float(target_layout.get("w", 0.0)) / 2.0
+        ty = float(target_layout.get("y", 0.0)) + float(target_layout.get("h", 0.0)) / 2.0
+        span = abs(tx - sx)
+        bend = max(24.0, min(220.0, span * 0.35))
+        return {
+            "sx": sx,
+            "sy": sy,
+            "c1x": sx + bend,
+            "c1y": sy,
+            "c2x": tx - bend,
+            "c2y": ty,
+            "tx": tx,
+            "ty": ty,
+        }

@@ -44,6 +44,8 @@ class VisualizerService:
         scenario: str,
         baseline_run_id: str,
         locale: str,
+        default_layer: str,
+        focus_cluster: str,
         ws_command: WSCallable,
         read_errors: ErrorCallable,
         open_browser: bool,
@@ -59,6 +61,8 @@ class VisualizerService:
         )
 
         runtime_source = "none"
+        normalized_default_layer = default_layer if default_layer in {"cluster", "structural", "detail"} else "cluster"
+        normalized_focus_cluster = focus_cluster.strip().lower()
         runtime_nodes: list[dict[str, Any]] = []
         runtime_edges: list[dict[str, Any]] = []
         timeline: dict[str, Any] = {"current_tick": -1, "events": [], "event_count": 0}
@@ -106,6 +110,7 @@ class VisualizerService:
             **map_payload.get("summary", {}),
             **self._extended_summary(map_payload),
         }
+        readability_warnings = self._build_readability_warnings(map_payload=map_payload, default_layer=normalized_default_layer)
 
         selected_baseline = baseline_run_id.strip() or self._select_baseline_run_id(
             project_path=project,
@@ -135,10 +140,12 @@ class VisualizerService:
             "result": "PASS",
             "raw_probe": raw_probe,
             "ui_version": 2,
-            "render_mode": "canvas_dom_hybrid",
+            "render_mode": "webgl_sigma",
             "scale_profile": "large",
+            "render_profile": "overview_first",
             "warnings": diff_payload.get("warnings", []),
             "runtime_diagnostics": runtime_diagnostics,
+            "readability_warnings": readability_warnings,
         }
 
         artifacts = self._renderer.write_bundle(
@@ -150,6 +157,8 @@ class VisualizerService:
             diff_payload=diff_payload,
             meta_payload=meta,
             locale=locale_value,
+            default_layer=normalized_default_layer,
+            focus_cluster=normalized_focus_cluster,
         )
 
         self._write_i18n_file(artifacts.visualizer_dir)
@@ -166,6 +175,17 @@ class VisualizerService:
             "summary": map_payload.get("summary", {}),
             "baseline_run_id": selected_baseline,
         }
+
+    def _build_readability_warnings(self, *, map_payload: dict[str, Any], default_layer: str) -> list[str]:
+        summary = map_payload.get("summary", {})
+        function_count = int(summary.get("function_count", 0))
+        node_count = int(summary.get("file_count", 0)) + int(summary.get("class_count", 0)) + function_count
+        warnings: list[str] = []
+        if default_layer != "cluster" and function_count >= 500:
+            warnings.append("dense_function_graph")
+        if node_count >= 1200:
+            warnings.append("very_large_graph")
+        return warnings
 
     async def live_start(
         self,
@@ -221,6 +241,7 @@ class VisualizerService:
         diff_payload = _load("diff.json")
         meta_payload = _load("meta.json")
         view_model_payload = _load("view_model.json")
+        bundle_payload = _load("graph.bundle.json")
 
         return {
             "status": "ok",
@@ -231,6 +252,7 @@ class VisualizerService:
             "diff": diff_payload,
             "meta": meta_payload,
             "view_model": view_model_payload,
+            "graph_bundle": bundle_payload,
         }
 
     def list_runs(self, *, project_path: str, scenario: str, limit: int = 30) -> dict[str, Any]:

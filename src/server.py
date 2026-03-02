@@ -614,6 +614,12 @@ TOOLS = [
                 "baseline_run_id": {"type": "string", "default": ""},
                 "open": {"type": "boolean", "default": False},
                 "locale": {"type": "string", "default": "ko"},
+                "default_layer": {
+                    "type": "string",
+                    "enum": ["cluster", "structural", "detail"],
+                    "default": "cluster",
+                },
+                "focus_cluster": {"type": "string", "default": ""},
             },
         },
     ),
@@ -1283,6 +1289,8 @@ async def _godot_visualizer_map_project(args: dict) -> list[TextContent]:
     baseline_run_id = str(args.get("baseline_run_id", "")).strip()
     open_browser = bool(args.get("open", False))
     locale = str(args.get("locale", "ko")).strip()
+    default_layer = str(args.get("default_layer", "cluster")).strip().lower()
+    focus_cluster = str(args.get("focus_cluster", "")).strip().lower()
 
     async def _ctx_ws(method: str, params: dict | None) -> dict[str, Any]:
         return await _ws_command(method, params)
@@ -1305,6 +1313,8 @@ async def _godot_visualizer_map_project(args: dict) -> list[TextContent]:
             scenario=scenario,
             baseline_run_id=baseline_run_id,
             locale=locale,
+            default_layer=default_layer,
+            focus_cluster=focus_cluster,
             ws_command=_ctx_ws,
             read_errors=_ctx_errors,
             open_browser=open_browser,
@@ -1354,6 +1364,8 @@ async def _godot_visualizer_live_start(args: dict) -> list[TextContent]:
                     "baseline_run_id": baseline_run_id,
                     "open": False,
                     "locale": locale,
+                    "default_layer": "cluster",
+                    "focus_cluster": "",
                 }
             )
             payload = _decode_text_result(mapped)

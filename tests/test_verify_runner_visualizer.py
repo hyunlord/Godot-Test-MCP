@@ -53,11 +53,28 @@ class FakeVisualizerClient:
             run_id = "visual-run"
             base = self._project_path / ".godot-test-mcp" / "runs" / run_id / "visualizer"
             base.mkdir(parents=True, exist_ok=True)
+            assets = base / "assets"
+            assets.mkdir(parents=True, exist_ok=True)
 
             (base / "map.json").write_text(json.dumps({"nodes": [], "edges": [], "summary": {}}), encoding="utf-8")
             (base / "timeline.json").write_text(json.dumps({"events": [], "event_count": 0}), encoding="utf-8")
             (base / "causality.json").write_text(json.dumps({"links": []}), encoding="utf-8")
             (base / "diff.json").write_text(json.dumps({"summary": {"added_node_count": 0}}), encoding="utf-8")
+            (base / "graph.bundle.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "nodes": [],
+                        "edges": [],
+                        "calls_edges": [],
+                        "clusters": [],
+                        "cluster_edges": [],
+                        "search_index": {"items": []},
+                        "layouts": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
             (base / "meta.json").write_text(
                 json.dumps(
                     {
@@ -69,11 +86,24 @@ class FakeVisualizerClient:
                 ),
                 encoding="utf-8",
             )
-            (base / "view_model.json").write_text(json.dumps({"clusters": [], "nodesById": {}, "edgesById": {}}), encoding="utf-8")
+            (base / "view_model.json").write_text(
+                json.dumps(
+                    {
+                        "clusters": [],
+                        "nodesById": {},
+                        "edgesById": {},
+                        "layers": {"cluster": {}, "structural": {}, "detail": {}},
+                        "ui_defaults": {"default_layer": "cluster"},
+                    }
+                ),
+                encoding="utf-8",
+            )
             (base / "index.html").write_text("<html></html>", encoding="utf-8")
             (base / "app.js").write_text("console.log('x')", encoding="utf-8")
+            (assets / "app.123.js").write_text("console.log('x')", encoding="utf-8")
             if not self._missing_css:
                 (base / "styles.css").write_text("body{}", encoding="utf-8")
+                (assets / "app.123.css").write_text("body{}", encoding="utf-8")
             (base / "offline.html").write_text("<html>offline</html>", encoding="utf-8")
 
             return {
@@ -87,9 +117,11 @@ class FakeVisualizerClient:
                     "diff_path": str(base / "diff.json"),
                     "meta_path": str(base / "meta.json"),
                     "view_model_path": str(base / "view_model.json"),
+                    "bundle_path": str(base / "graph.bundle.json"),
                     "html_path": str(base / "index.html"),
                     "js_path": str(base / "app.js"),
                     "css_path": str(base / "styles.css"),
+                    "assets_dir": str(assets),
                     "offline_html_path": str(base / "offline.html"),
                 },
             }

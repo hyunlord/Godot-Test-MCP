@@ -35,13 +35,19 @@ class TestVisualizerToolRouting:
                 "run_id": "r1",
                 "summary": {"runtime_error_count": 1, "runtime_warning_count": 0},
             }
-            result = await handle_call_tool("godot_visualizer_map_project", {"project_path": "/tmp/project"})
+            result = await handle_call_tool(
+                "godot_visualizer_map_project",
+                {"project_path": "/tmp/project", "default_layer": "detail", "focus_cluster": "core"},
+            )
             payload = _decode(result)
             assert payload["status"] == "ok"
             assert payload["run_id"] == "r1"
             assert payload["summary"]["runtime_error_count"] == 1
             assert payload["summary"]["runtime_warning_count"] == 0
             assert mock_map.await_count == 1
+            kwargs = mock_map.await_args.kwargs
+            assert kwargs["default_layer"] == "detail"
+            assert kwargs["focus_cluster"] == "core"
 
     @pytest.mark.asyncio
     async def test_live_stop_routes_to_service(self) -> None:

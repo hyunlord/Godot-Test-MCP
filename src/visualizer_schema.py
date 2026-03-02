@@ -93,6 +93,8 @@ class VisualizerRunArtifacts:
     html_path: str
     js_path: str
     css_path: str
+    bundle_path: str = ""
+    assets_dir: str = ""
     view_model_path: str = ""
     offline_html_path: str = ""
 
@@ -109,6 +111,8 @@ class VisualizerRunArtifacts:
             "html_path": self.html_path,
             "js_path": self.js_path,
             "css_path": self.css_path,
+            "bundle_path": self.bundle_path,
+            "assets_dir": self.assets_dir,
             "view_model_path": self.view_model_path,
             "offline_html_path": self.offline_html_path,
         }

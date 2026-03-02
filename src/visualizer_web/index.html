@@ -38,6 +38,10 @@
             <label><input id="diff-toggle" type="checkbox" checked /> <span id="label-diff-toggle">Diff overlay</span></label>
           </div>
 
+          <div class="control toggle-wrap">
+            <label><input id="calls-toggle" type="checkbox" /> <span id="label-calls-toggle">Show calls edges</span></label>
+          </div>
+
           <div class="control">
             <label for="lang-select" id="label-lang">Lang</label>
             <select id="lang-select">
@@ -52,6 +56,15 @@
         <div id="runtime-warning-title" class="warning-title"></div>
         <div id="runtime-warning-message" class="warning-message"></div>
         <div id="runtime-warning-hint" class="warning-hint"></div>
+        <div class="warning-actions">
+          <button id="runtime-warning-jump" type="button">Jump to diagnostic</button>
+          <button id="runtime-warning-toggle" type="button">Collapse</button>
+        </div>
+      </section>
+
+      <section class="context-bar">
+        <div id="breadcrumb" class="breadcrumb">All</div>
+        <div id="search-results" class="search-results"></div>
       </section>
 
       <main class="main-grid">
@@ -75,6 +88,10 @@
         <aside class="inspector-panel" id="inspector-panel">
           <div class="panel-title" id="label-inspector">Detail Inspector</div>
           <div id="inspector-content" class="inspector-body">Select a node to inspect details.</div>
+          <div class="inspector-actions">
+            <button id="inspector-raw-toggle" type="button">Raw JSON</button>
+          </div>
+          <pre id="inspector-raw" class="inspector-body hidden"></pre>
 
           <div class="panel-title" id="label-edit">Edit Preview</div>
           <div class="edit-drawer" id="edit-drawer">

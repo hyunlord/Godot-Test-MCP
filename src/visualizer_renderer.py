@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
+from .visualizer_bundle import VisualizerBundleBuilder
 from .visualizer_i18n import build_i18n_payload
 from .visualizer_schema import VisualizerRunArtifacts
 from .visualizer_view_model import VisualizerViewModelBuilder
 
 
 class VisualizerRenderer:
-    """Writes JSON artifacts and copies web assets from src/visualizer_web."""
+    """Writes JSON artifacts and copies web assets from built dist bundle."""
 
     def __init__(self) -> None:
         self._view_model_builder = VisualizerViewModelBuilder()
+        self._bundle_builder = VisualizerBundleBuilder()
 
     def write_bundle(
         self,
@@ -28,6 +31,8 @@ class VisualizerRenderer:
         diff_payload: dict[str, Any],
         meta_payload: dict[str, Any],
         locale: str,
+        default_layer: str = "cluster",
+        focus_cluster: str = "",
     ) -> VisualizerRunArtifacts:
         project = Path(project_path).resolve()
         run_dir = project / ".godot-test-mcp" / "runs" / run_id
@@ -40,15 +45,14 @@ class VisualizerRenderer:
         diff_path = visualizer_dir / "diff.json"
         meta_path = visualizer_dir / "meta.json"
         view_model_path = visualizer_dir / "view_model.json"
+        bundle_path = visualizer_dir / "graph.bundle.json"
         html_path = visualizer_dir / "index.html"
-        js_path = visualizer_dir / "app.js"
-        css_path = visualizer_dir / "styles.css"
         offline_html_path = visualizer_dir / "offline.html"
 
         meta = dict(meta_payload)
         meta.setdefault("locale", locale)
         meta.setdefault("ui_version", 2)
-        meta.setdefault("render_mode", "canvas_dom_hybrid")
+        meta.setdefault("render_mode", "webgl_sigma")
         meta.setdefault("scale_profile", "large")
         warnings = meta.get("warnings", [])
         if not isinstance(warnings, list):
@@ -60,6 +64,16 @@ class VisualizerRenderer:
             timeline_payload=timeline_payload,
             causality_payload=causality_payload,
             diff_payload=diff_payload,
+            default_layer=default_layer,
+            focus_cluster=focus_cluster,
+        )
+        bundle_payload = self._bundle_builder.build(
+            map_payload=map_payload,
+            view_model=view_model,
+            timeline_payload=timeline_payload,
+            causality_payload=causality_payload,
+            diff_payload=diff_payload,
+            meta_payload=meta,
         )
 
         map_path.write_text(json.dumps(map_payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -68,6 +82,7 @@ class VisualizerRenderer:
         diff_path.write_text(json.dumps(diff_payload, indent=2, ensure_ascii=False), encoding="utf-8")
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         view_model_path.write_text(json.dumps(view_model, indent=2, ensure_ascii=False), encoding="utf-8")
+        bundle_path.write_text(json.dumps(bundle_payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
         inline_data = {
             "i18n": build_i18n_payload(),
@@ -77,8 +92,9 @@ class VisualizerRenderer:
             "causality": causality_payload,
             "diff": diff_payload,
             "view_model": view_model,
+            "graph_bundle": bundle_payload,
         }
-        self._copy_web_assets(visualizer_dir=visualizer_dir, inline_data=inline_data)
+        paths = self._copy_web_assets(visualizer_dir=visualizer_dir, inline_data=inline_data)
         offline_html_path.write_text(
             self._build_offline_html(
                 map_payload=map_payload,
@@ -87,6 +103,7 @@ class VisualizerRenderer:
                 diff_payload=diff_payload,
                 meta_payload=meta,
                 view_model=view_model,
+                bundle_payload=bundle_payload,
             ),
             encoding="utf-8",
         )
@@ -101,18 +118,97 @@ class VisualizerRenderer:
             diff_path=str(diff_path),
             meta_path=str(meta_path),
             html_path=str(html_path),
-            js_path=str(js_path),
-            css_path=str(css_path),
+            js_path=paths["js_path"],
+            css_path=paths["css_path"],
+            bundle_path=str(bundle_path),
+            assets_dir=paths["assets_dir"],
             view_model_path=str(view_model_path),
             offline_html_path=str(offline_html_path),
         )
 
-    def _copy_web_assets(self, *, visualizer_dir: Path, inline_data: dict[str, Any]) -> None:
-        web_dir = Path(__file__).resolve().parent / "visualizer_web"
+    def _copy_web_assets(self, *, visualizer_dir: Path, inline_data: dict[str, Any]) -> dict[str, str]:
+        dist_dir = Path(__file__).resolve().parent / "visualizer_web_dist"
+        legacy_dir = Path(__file__).resolve().parent / "visualizer_web"
+        if dist_dir.is_dir() and (dist_dir / "index.html").is_file():
+            return self._copy_dist_assets(visualizer_dir=visualizer_dir, dist_dir=dist_dir, inline_data=inline_data)
+        return self._copy_legacy_assets(visualizer_dir=visualizer_dir, web_dir=legacy_dir, inline_data=inline_data)
+
+    def _copy_dist_assets(self, *, visualizer_dir: Path, dist_dir: Path, inline_data: dict[str, Any]) -> dict[str, str]:
+        for child in visualizer_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            elif child.name not in {
+                "map.json",
+                "timeline.json",
+                "causality.json",
+                "diff.json",
+                "meta.json",
+                "view_model.json",
+                "graph.bundle.json",
+                "offline.html",
+            }:
+                child.unlink(missing_ok=True)
+
+        for src in dist_dir.iterdir():
+            if src.name == "index.html":
+                continue
+            dst = visualizer_dir / src.name
+            if src.is_dir():
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+
+        inline_json = json.dumps(inline_data, ensure_ascii=False).replace("</", "<\\/")
+        index_template = (dist_dir / "index.html").read_text(encoding="utf-8")
+        index_html = index_template.replace("__VISUALIZER_INLINE_DATA__", inline_json)
+        (visualizer_dir / "index.html").write_text(index_html, encoding="utf-8")
+
+        js_path = ""
+        css_path = ""
+        manifest_path = visualizer_dir / ".vite" / "manifest.json"
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(manifest, dict):
+                    first = manifest.get("index.html", next(iter(manifest.values()), {}))
+                    if isinstance(first, dict):
+                        file_value = str(first.get("file", ""))
+                        if file_value:
+                            js_path = str((visualizer_dir / file_value).resolve())
+                        css_files = first.get("css", [])
+                        if isinstance(css_files, list) and len(css_files) > 0:
+                            css_path = str((visualizer_dir / str(css_files[0])).resolve())
+            except Exception:
+                js_path = ""
+                css_path = ""
+
+        if js_path == "":
+            js_candidate = next(iter(sorted((visualizer_dir / "assets").glob("*.js"))), None)
+            if js_candidate is not None:
+                js_path = str(js_candidate.resolve())
+        if css_path == "":
+            css_candidate = next(iter(sorted((visualizer_dir / "assets").glob("*.css"))), None)
+            if css_candidate is not None:
+                css_path = str(css_candidate.resolve())
+
+        if js_path == "":
+            js_path = str((visualizer_dir / "app.js").resolve())
+        if css_path == "":
+            css_path = str((visualizer_dir / "styles.css").resolve())
+
+        return {
+            "js_path": js_path,
+            "css_path": css_path,
+            "assets_dir": str((visualizer_dir / "assets").resolve()),
+        }
+
+    def _copy_legacy_assets(self, *, visualizer_dir: Path, web_dir: Path, inline_data: dict[str, Any]) -> dict[str, str]:
         required = ["index.html", "app.js", "styles.css", "i18n.json"]
         missing = [name for name in required if not (web_dir / name).is_file()]
         if missing:
-            raise ValueError(f"visualizer_web assets missing: {missing}")
+            raise ValueError(f"visualizer web assets missing: {missing}")
 
         for name in ["app.js", "styles.css", "i18n.json"]:
             src = web_dir / name
@@ -124,6 +220,15 @@ class VisualizerRenderer:
         index_html = index_template.replace("__VISUALIZER_INLINE_DATA__", inline_json)
         (visualizer_dir / "index.html").write_text(index_html, encoding="utf-8")
 
+        assets_dir = visualizer_dir / "assets"
+        assets_dir.mkdir(exist_ok=True)
+
+        return {
+            "js_path": str((visualizer_dir / "app.js").resolve()),
+            "css_path": str((visualizer_dir / "styles.css").resolve()),
+            "assets_dir": str(assets_dir.resolve()),
+        }
+
     def _build_offline_html(
         self,
         *,
@@ -133,6 +238,7 @@ class VisualizerRenderer:
         diff_payload: dict[str, Any],
         meta_payload: dict[str, Any],
         view_model: dict[str, Any],
+        bundle_payload: dict[str, Any],
     ) -> str:
         def dump(value: Any) -> str:
             return json.dumps(value, ensure_ascii=False, indent=2)
@@ -161,6 +267,7 @@ class VisualizerRenderer:
     </div>
     <div class=\"grid\">
       <section class=\"panel\"><h2>meta.json</h2><pre>{dump(meta_payload)}</pre></section>
+      <section class=\"panel\"><h2>graph.bundle.json</h2><pre>{dump(bundle_payload)}</pre></section>
       <section class=\"panel\"><h2>view_model.json</h2><pre>{dump(view_model)}</pre></section>
       <section class=\"panel\"><h2>map.json</h2><pre>{dump(map_payload)}</pre></section>
       <section class=\"panel\"><h2>timeline.json</h2><pre>{dump(timeline_payload)}</pre></section>

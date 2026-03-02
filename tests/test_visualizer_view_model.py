@@ -56,6 +56,8 @@ def test_view_model_builder_generates_stats_and_adjacency() -> None:
         timeline_payload={"events": [], "event_count": 0},
         causality_payload={"links": []},
         diff_payload=diff_payload,
+        default_layer="cluster",
+        focus_cluster="",
     )
 
     assert vm["version"] == 2
@@ -66,3 +68,8 @@ def test_view_model_builder_generates_stats_and_adjacency() -> None:
     assert vm["nodesById"]["class::a"]["diff_state"] == "added"
     assert "file::a" in vm["adjacency"]["out"]
     assert vm["filters"]["languages"] == ["gdscript"]
+    assert vm["ui_defaults"]["default_layer"] == "cluster"
+    assert "layers" in vm
+    assert "cluster" in vm["layers"]
+    assert "structural" in vm["layers"]
+    assert "detail" in vm["layers"]

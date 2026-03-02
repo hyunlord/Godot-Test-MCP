@@ -8,3 +8,5 @@ build/
 .omc/
 uv.lock
 .omx/
+node_modules/
+frontend/visualizer-app/node_modules/

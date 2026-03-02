@@ -59,6 +59,8 @@ async def test_map_project_exports_runtime_diagnostics_to_summary_and_meta(tmp_p
             scenario="",
             baseline_run_id="",
             locale="ko",
+            default_layer="cluster",
+            focus_cluster="",
             ws_command=AsyncMock(return_value={"status": "ok"}),
             read_errors=lambda: {"errors": [], "warnings": []},
             open_browser=False,
@@ -70,3 +72,4 @@ async def test_map_project_exports_runtime_diagnostics_to_summary_and_meta(tmp_p
 
         meta_payload = mock_write_bundle.call_args.kwargs["meta_payload"]
         assert meta_payload["runtime_diagnostics"] == diagnostics
+        assert meta_payload["render_profile"] == "overview_first"

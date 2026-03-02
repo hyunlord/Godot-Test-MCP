@@ -46,6 +46,7 @@ packages = ["src"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/harness" = "src/harness"
 "src/visualizer_web" = "src/visualizer_web"
+"src/visualizer_web_dist" = "src/visualizer_web_dist"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
