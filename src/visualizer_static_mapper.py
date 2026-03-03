@@ -49,6 +49,8 @@ _CS_METHOD_RE = re.compile(
 )
 _CS_EVENT_RE = re.compile(r"^\s*(?:public|private|protected|internal|static|\s)+event\s+([A-Za-z_][A-Za-z0-9_<>.,\[\]\s]+)\s+([A-Za-z_][A-Za-z0-9_]*)")
 _CS_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_VIZ_DOMAIN_TAG_RE = re.compile(r"@viz-domain\s*:\s*([A-Za-z0-9_-]+)")
+_VIZ_SYSTEM_TAG_RE = re.compile(r"@viz-system\s*:\s*([A-Za-z0-9_-]+)")
 
 
 @dataclass
@@ -87,6 +89,7 @@ class VisualizerStaticMapper:
             file_node_id = f"file::{res_path}"
             lines = self._read_lines(file_path)
             folder_category = self._category_for(file_path.relative_to(project).parts)
+            viz_tags = self._extract_visualizer_tags(lines)
             file_node = VisualizerNode(
                 id=file_node_id,
                 kind="file",
@@ -95,7 +98,7 @@ class VisualizerStaticMapper:
                 language=language,
                 folder_category=folder_category,
                 loc=len(lines),
-                metadata={"git_status": git_status.get(res_path)},
+                metadata={"git_status": git_status.get(res_path), "viz_tags": viz_tags},
             )
             all_nodes.append(file_node)
 
@@ -634,3 +637,25 @@ class VisualizerStaticMapper:
                 continue
             return candidate
         return "root"
+
+    def _extract_visualizer_tags(self, lines: list[str]) -> dict[str, str]:
+        domain = ""
+        system = ""
+        for raw in lines:
+            line = raw.strip()
+            if domain == "":
+                match_domain = _VIZ_DOMAIN_TAG_RE.search(line)
+                if match_domain:
+                    domain = match_domain.group(1).strip().lower()
+            if system == "":
+                match_system = _VIZ_SYSTEM_TAG_RE.search(line)
+                if match_system:
+                    system = match_system.group(1).strip().lower()
+            if domain != "" and system != "":
+                break
+        result: dict[str, str] = {}
+        if domain != "":
+            result["domain"] = domain
+        if system != "":
+            result["system"] = system
+        return result

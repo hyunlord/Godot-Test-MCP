@@ -72,6 +72,8 @@ class FakeVisualizerClient:
                         "search_index": {"items": []},
                         "layouts": {},
                         "board_model": {"clusters": [], "links": [], "hotspots": []},
+                        "board_model_v2": {"lanes": [], "links": [], "legend": []},
+                        "classification": {"lane_strategy": "hybrid", "confidence": 0.0, "source_signals": {}},
                     }
                 ),
                 encoding="utf-8",
@@ -97,8 +99,16 @@ class FakeVisualizerClient:
                         "nodesById": {},
                         "edgesById": {},
                         "layers": {"cluster": {}, "structural": {}, "detail": {}},
-                        "ui_defaults": {"default_layer": "cluster"},
+                        "ui_defaults": {
+                            "default_layer": "cluster",
+                            "detail_requires_anchor": True,
+                            "structural_autoselect": "top_file_card",
+                            "cluster_preview_card_limit": 4,
+                            "structural_show_all_on_more": True,
+                        },
                         "board_model": {"clusters": [], "links": [], "hotspots": []},
+                        "board_model_v2": {"lanes": [], "links": [], "legend": []},
+                        "classification": {"lane_strategy": "hybrid", "confidence": 0.0, "source_signals": {}},
                         "cluster_layout_health": {
                             "overlap_count": 0,
                             "duplicate_anchor_count": 0,

@@ -1,6 +1,12 @@
 export type VisualizerMode = 'cluster' | 'structural' | 'detail';
 export type FocusScope = 'global' | 'clusterSubgraph' | 'kHop' | 'pathSubgraph';
 export type OverlayState = 'none' | 'searchOpen' | 'error' | 'empty' | 'densityWarning';
+export type NavigationReason = 'cluster_click' | 'more_click' | 'search_focus' | 'guided_flow' | 'manual_mode';
+
+export interface UIFlowState {
+  lastNavigationReason: NavigationReason;
+  structuralExpandedLaneId: string;
+}
 
 export interface BundleNode {
   id: string;
@@ -30,7 +36,8 @@ export interface BoardCard {
   id: string;
   title: string;
   kind: string;
-  stats?: { in?: number; out?: number; loc?: number };
+  path?: string;
+  stats?: { in?: number; out?: number; loc?: number; functions?: number; classes?: number; signals?: number };
   x: number;
   y: number;
   w: number;
@@ -42,7 +49,15 @@ export interface BoardCluster {
   title: string;
   rect: { x: number; y: number; w: number; h: number };
   cards: BoardCard[];
-  summary?: { node_count?: number; external_count?: number; hot?: number };
+  summary?: {
+    node_count?: number;
+    external_count?: number;
+    hot?: number;
+    file_count?: number;
+    function_count?: number;
+    class_count?: number;
+    signal_count?: number;
+  };
 }
 
 export interface BoardLink {
@@ -62,6 +77,77 @@ export interface BoardModel {
   clusters: BoardCluster[];
   links: BoardLink[];
   hotspots: BoardHotspot[];
+}
+
+export interface BoardV2LegendItem {
+  edge_type: string;
+  label: string;
+  color: string;
+  style: string;
+  default_visible: boolean;
+}
+
+export interface BoardV2Card {
+  id: string;
+  group_id: string;
+  title: string;
+  kind: string;
+  path: string;
+  lane_key: string;
+  confidence: number;
+  source_signals: string[];
+  stats: { in: number; out: number; loc: number; functions: number; classes: number; signals: number };
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface BoardV2Lane {
+  id: string;
+  key: string;
+  title: string;
+  rect: { x: number; y: number; w: number; h: number };
+  cards: BoardV2Card[];
+  hidden_items_count: number;
+  summary: {
+    node_count: number;
+    file_count: number;
+    function_count: number;
+    class_count: number;
+    signal_count: number;
+    hot: number;
+    preview_card_count?: number;
+    total_card_count?: number;
+  };
+}
+
+export interface BoardV2LinkEvidence {
+  source_node: string;
+  target_node: string;
+  edge_type: string;
+  source_label: string;
+  target_label: string;
+  source_path: string;
+  target_path: string;
+  source_line: number;
+  target_line: number;
+}
+
+export interface BoardV2Link {
+  id: string;
+  source_lane: string;
+  target_lane: string;
+  count: number;
+  type_breakdown: Record<string, number>;
+  evidence_refs: BoardV2LinkEvidence[];
+  points?: { sx: number; sy: number; c1x: number; c1y: number; c2x: number; c2y: number; tx: number; ty: number };
+}
+
+export interface BoardModelV2 {
+  lanes: BoardV2Lane[];
+  links: BoardV2Link[];
+  legend: BoardV2LegendItem[];
 }
 
 export interface GraphBundle {
@@ -92,6 +178,10 @@ export interface GraphBundle {
     hidden_edge_types?: string[];
     collapsed_kinds?: string[];
     focus_cluster?: string;
+    detail_requires_anchor?: boolean;
+    structural_autoselect?: string;
+    cluster_preview_card_limit?: number;
+    structural_show_all_on_more?: boolean;
   };
   cluster_layout_health?: {
     overlap_count?: number;
@@ -99,6 +189,12 @@ export interface GraphBundle {
     max_density_band?: string;
   };
   board_model?: BoardModel;
+  board_model_v2?: BoardModelV2;
+  classification?: {
+    lane_strategy?: string;
+    confidence?: number;
+    source_signals?: Record<string, string[]>;
+  };
 }
 
 export interface ViewModelNode {
@@ -139,6 +235,10 @@ export interface ViewModel {
     default_layer?: VisualizerMode;
     hidden_edge_types?: string[];
     focus_cluster?: string;
+    detail_requires_anchor?: boolean;
+    structural_autoselect?: string;
+    cluster_preview_card_limit?: number;
+    structural_show_all_on_more?: boolean;
   };
   cluster_layout_health?: {
     overlap_count?: number;
@@ -146,6 +246,12 @@ export interface ViewModel {
     max_density_band?: string;
   };
   board_model?: BoardModel;
+  board_model_v2?: BoardModelV2;
+  classification?: {
+    lane_strategy?: string;
+    confidence?: number;
+    source_signals?: Record<string, string[]>;
+  };
 }
 
 export interface VisualizerPayload {

@@ -1156,6 +1156,8 @@ async def execute_scenario_pack(
                     and "ui_defaults" in view_model_json
                     and "cluster_layout_health" in view_model_json
                     and "board_model" in view_model_json
+                    and "board_model_v2" in view_model_json
+                    and "classification" in view_model_json
                     and str(bundle_json.get("schema_version", "")).strip() != ""
                     and "nodes" in bundle_json
                     and "edges" in bundle_json
@@ -1165,6 +1167,8 @@ async def execute_scenario_pack(
                     and "search_index" in bundle_json
                     and "layouts" in bundle_json
                     and "board_model" in bundle_json
+                    and "board_model_v2" in bundle_json
+                    and "classification" in bundle_json
                     and (assets_ok or assets_dir == "")
                 )
                 base["result"] = "PASS" if (len(missing_paths) == 0 and schema_ok) else "FAIL"

@@ -226,6 +226,8 @@ class VisualizerBundleBuilder:
             "ui_defaults": view_model.get("ui_defaults", {}),
             "cluster_layout_health": view_model.get("cluster_layout_health", {}),
             "board_model": view_model.get("board_model", {}),
+            "board_model_v2": view_model.get("board_model_v2", {}),
+            "classification": view_model.get("classification", {}),
         }
 
     def _layout_positions(self, *, view_model: dict[str, Any], layer_name: str) -> dict[str, Any]:

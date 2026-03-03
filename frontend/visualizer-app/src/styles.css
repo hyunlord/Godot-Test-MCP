@@ -91,6 +91,36 @@ button { cursor: pointer; }
   border-color: #2f7c63;
 }
 
+.legend-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 12px 8px;
+  border-bottom: 1px solid rgba(45, 78, 132, 0.55);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #2f4d84;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: #93a8d5;
+  background: rgba(13, 27, 55, 0.7);
+}
+
+.legend-item i {
+  font-style: normal;
+  font-weight: 700;
+}
+
+.legend-item.is-enabled {
+  color: #d8e6ff;
+  border-color: #5f89cf;
+}
+
 .mode-guide {
   margin: 8px 12px 0;
   border: 1px solid #314f87;
@@ -195,6 +225,27 @@ button { cursor: pointer; }
   font-size: 13px;
 }
 
+.workflow-panel {
+  border-top: 1px solid #28467c;
+  padding-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.workflow-step {
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(18, 33, 63, 0.95), rgba(11, 20, 41, 0.95));
+  border: 1px solid #3a5f9e;
+  color: #dce8ff;
+  font-size: 12px;
+}
+
+.workflow-step:hover {
+  border-color: #72ffd5;
+}
+
 .filter-title {
   color: #d6e2ff;
   font-weight: 600;
@@ -248,9 +299,9 @@ button { cursor: pointer; }
 }
 
 .board-root {
-  position: absolute;
-  inset: 0;
-  overflow: auto;
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
 }
 
 .board-empty {
@@ -261,13 +312,31 @@ button { cursor: pointer; }
 .board-links {
   position: absolute;
   inset: 0;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .board-link {
   fill: none;
   stroke: rgba(102, 154, 246, 0.55);
   stroke-linecap: round;
+}
+
+.board-link.is-card {
+  stroke: rgba(127, 172, 255, 0.52);
+}
+
+.board-link.is-selected {
+  stroke: #79ffd7;
+  stroke-width: 4;
+  filter: drop-shadow(0 0 6px rgba(121, 255, 215, 0.45));
+}
+
+.board-link-hit {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0);
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
 }
 
 .board-cluster {
@@ -315,16 +384,16 @@ button { cursor: pointer; }
   background: linear-gradient(180deg, rgba(17, 30, 57, 0.98), rgba(10, 21, 42, 0.98));
   border-radius: 10px;
   text-align: left;
-  padding: 8px;
+  padding: 10px 11px;
   display: grid;
   align-content: center;
-  gap: 2px;
+  gap: 4px;
   overflow: hidden;
 }
 
 .board-card strong {
-  font-size: 14px;
-  line-height: 1.2;
+  font-size: 15px;
+  line-height: 1.34;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
@@ -332,6 +401,7 @@ button { cursor: pointer; }
 
 .board-card small {
   font-size: 11px;
+  line-height: 1.36;
   color: var(--muted);
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -349,12 +419,19 @@ button { cursor: pointer; }
   position: absolute;
   right: 10px;
   bottom: 8px;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.2;
   color: #a8b8df;
   border: 1px solid rgba(77, 103, 156, 0.8);
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 4px 10px;
   background: rgba(10, 21, 42, 0.9);
+  cursor: pointer;
+}
+
+.board-more:hover {
+  border-color: #76ffd8;
+  color: #d8fff3;
 }
 
 .graph-error {
@@ -369,6 +446,25 @@ button { cursor: pointer; }
   padding: 12px;
   display: grid;
   gap: 6px;
+}
+
+.graph-empty-hint {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 18px;
+  z-index: 5;
+  border: 1px solid #3b629d;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(17, 32, 61, 0.94), rgba(10, 19, 38, 0.95));
+  color: #d9e6ff;
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+}
+
+.graph-empty-title {
+  font-weight: 700;
 }
 
 .graph-error-title {
@@ -423,6 +519,35 @@ button { cursor: pointer; }
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.summary-list {
+  border-top: 1px solid #294a7d;
+  margin-top: 8px;
+  padding-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.summary-link {
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.link-evidence-row {
+  border: 1px solid #2a4778;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(9, 20, 41, 0.8);
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.link-evidence-row small {
+  color: var(--muted);
 }
 
 .raw-toggle {

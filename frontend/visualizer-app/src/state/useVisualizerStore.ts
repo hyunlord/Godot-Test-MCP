@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   FocusScope,
   GraphBundle,
+  NavigationReason,
   OverlayState,
   SearchResultItem,
   ViewModel,
@@ -16,6 +17,8 @@ export interface HistoryEntry {
   focusScope: FocusScope;
   kHop: number;
   pathNodeIds: string[];
+  lastNavigationReason: NavigationReason;
+  structuralExpandedLaneId: string;
 }
 
 interface StoreState {
@@ -42,16 +45,18 @@ interface StoreState {
   toast: string;
   rawJsonOpen: boolean;
   diagnosticsCollapsed: boolean;
+  lastNavigationReason: NavigationReason;
+  structuralExpandedLaneId: string;
 
   hydrate: (payload: VisualizerPayload) => void;
-  setMode: (mode: VisualizerMode) => void;
+  setMode: (mode: VisualizerMode, reason?: NavigationReason) => void;
   setOverlay: (overlay: OverlayState) => void;
   setSearchQuery: (query: string) => void;
   setSearchResults: (results: SearchResultItem[]) => void;
   selectNode: (nodeId: string) => void;
   selectCluster: (clusterId: string) => void;
-  drillToCluster: (clusterId: string) => void;
-  drillToDetail: (nodeId: string, hop?: number) => void;
+  drillToCluster: (clusterId: string, reason?: NavigationReason) => void;
+  drillToDetail: (nodeId: string, hop?: number, reason?: NavigationReason) => void;
   showPathScope: (pathNodeIds: string[]) => void;
   toggleEdgeType: (edgeType: string) => void;
   toggleCalls: () => void;
@@ -72,6 +77,8 @@ const INITIAL_HISTORY: HistoryEntry = {
   focusScope: 'global',
   kHop: 2,
   pathNodeIds: [],
+  lastNavigationReason: 'manual_mode',
+  structuralExpandedLaneId: '',
 };
 
 export const useVisualizerStore = create<StoreState>((set, get) => ({
@@ -98,6 +105,8 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
   toast: '',
   rawJsonOpen: false,
   diagnosticsCollapsed: false,
+  lastNavigationReason: 'manual_mode',
+  structuralExpandedLaneId: '',
 
   hydrate: (payload) => {
     const bundle = payload.graph_bundle ?? null;
@@ -105,10 +114,15 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
     const defaultMode = bundle?.ui_defaults?.default_layer ?? viewModel?.ui_defaults?.default_layer ?? 'cluster';
 
     const edgeEnabled: Record<string, boolean> = {};
+    const defaultEnabled = new Set<string>(['contains', 'extends']);
     const edgeTypes = Array.isArray(bundle?.edge_types) ? bundle!.edge_types : [];
     for (const edgeType of edgeTypes) {
-      edgeEnabled[edgeType] = edgeType !== 'calls';
+      edgeEnabled[edgeType] = defaultEnabled.has(String(edgeType));
     }
+    if (!('contains' in edgeEnabled)) edgeEnabled.contains = true;
+    if (!('extends' in edgeEnabled)) edgeEnabled.extends = true;
+    if (!('emits' in edgeEnabled)) edgeEnabled.emits = false;
+    if (!('loads' in edgeEnabled)) edgeEnabled.loads = false;
     if (!('calls' in edgeEnabled)) edgeEnabled.calls = false;
 
     set({
@@ -131,13 +145,35 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
           focusScope: 'global',
           kHop: 2,
           pathNodeIds: [],
+          lastNavigationReason: 'manual_mode',
+          structuralExpandedLaneId: '',
         },
       ],
       historyIndex: 0,
+      lastNavigationReason: 'manual_mode',
+      structuralExpandedLaneId: '',
     });
   },
 
-  setMode: (mode) => set({ mode }),
+  setMode: (mode, reason = 'manual_mode') => {
+    const state = get();
+    if (mode === 'detail') {
+      const requiresAnchor = Boolean(
+        state.bundle?.ui_defaults?.detail_requires_anchor
+          ?? state.viewModel?.ui_defaults?.detail_requires_anchor
+          ?? true,
+      );
+      if (requiresAnchor && state.selectedNodeId.trim() === '') {
+        set({
+          mode: 'structural',
+          toast: 'Detail 모드는 먼저 노드를 선택해야 합니다.',
+          lastNavigationReason: reason,
+        });
+        return;
+      }
+    }
+    set({ mode, lastNavigationReason: reason });
+  },
 
   setOverlay: (overlay) => set({ overlay }),
 
@@ -152,13 +188,20 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
 
   setSearchIndex: (index) => set({ searchIndex: index }),
 
-  selectNode: (nodeId) =>
+  selectNode: (nodeId) => {
+    const viewModel = get().viewModel;
+    const layout =
+      viewModel?.nodesById?.[nodeId]?.layout && typeof viewModel.nodesById[nodeId].layout === 'object'
+        ? viewModel.nodesById[nodeId].layout
+        : {};
+    const clusterId = String((layout as Record<string, unknown>).cluster_id ?? '').trim();
     set({
       selectedNodeId: nodeId,
-      selectedClusterId: '',
+      selectedClusterId: clusterId !== '' ? clusterId : get().selectedClusterId,
       focusScope: get().mode === 'detail' ? 'kHop' : get().focusScope,
       pathNodeIds: [],
-    }),
+    });
+  },
 
   selectCluster: (clusterId) =>
     set({
@@ -168,7 +211,7 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
       pathNodeIds: [],
     }),
 
-  drillToCluster: (clusterId) => {
+  drillToCluster: (clusterId, reason = 'cluster_click') => {
     set({
       mode: 'structural',
       selectedClusterId: clusterId,
@@ -176,18 +219,27 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
       focusScope: 'clusterSubgraph',
       kHop: 2,
       pathNodeIds: [],
+      lastNavigationReason: reason,
+      structuralExpandedLaneId: reason === 'more_click' ? clusterId : '',
     });
     get().pushHistory();
   },
 
-  drillToDetail: (nodeId, hop = 2) => {
+  drillToDetail: (nodeId, hop = 2, reason = 'manual_mode') => {
+    const viewModel = get().viewModel;
+    const layout =
+      viewModel?.nodesById?.[nodeId]?.layout && typeof viewModel.nodesById[nodeId].layout === 'object'
+        ? viewModel.nodesById[nodeId].layout
+        : {};
+    const clusterId = String((layout as Record<string, unknown>).cluster_id ?? '').trim();
     set({
       mode: 'detail',
       selectedNodeId: nodeId,
-      selectedClusterId: '',
+      selectedClusterId: clusterId,
       focusScope: 'kHop',
       kHop: Math.max(1, Math.min(3, hop)),
       pathNodeIds: [],
+      lastNavigationReason: reason,
     });
     get().pushHistory();
   },
@@ -244,6 +296,8 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
       focusScope: state.focusScope,
       kHop: state.kHop,
       pathNodeIds: state.pathNodeIds,
+      lastNavigationReason: state.lastNavigationReason,
+      structuralExpandedLaneId: state.structuralExpandedLaneId,
     };
     const head = state.history.slice(0, state.historyIndex + 1);
     head.push(entry);

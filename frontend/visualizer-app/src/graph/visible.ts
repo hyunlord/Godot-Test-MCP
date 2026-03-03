@@ -76,6 +76,16 @@ export function buildVisibleGraph(args: {
   let nodeIds = Array.isArray(layer?.node_ids) ? [...layer.node_ids] : Object.keys(layerNodesById);
   let edgeIds = Array.isArray(layer?.edge_ids) ? [...layer.edge_ids] : Object.keys(layerEdgesById);
 
+  // Detail mode is only meaningful when a node/path scope is selected.
+  // Without an anchor node, rendering the entire detail graph creates unreadable "dot hairball" output.
+  if (mode === 'detail' && selectedNodeId.trim() === '' && pathNodeIds.length <= 1) {
+    return {
+      nodes: [],
+      edges: [],
+      sampled: false,
+    };
+  }
+
   if (mode === 'structural' && selectedClusterId) {
     const cluster = (viewModel.clusters ?? []).find((item) => String(item.id) === selectedClusterId);
     const focusKey = String(cluster?.key ?? '').toLowerCase();

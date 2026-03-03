@@ -13,8 +13,11 @@ import { buildVisibleGraph } from '../graph/visible';
 import { useVisualizerStore } from '../state/useVisualizerStore';
 import type {
   BoardModel,
+  BoardModelV2,
+  BoardV2LegendItem,
   GraphBundle,
   SearchResultItem,
+  ViewModelEdge,
   ViewModelNode,
   VisualizerMode,
   VisualizerPayload,
@@ -118,10 +121,10 @@ function supportsWebGL(): boolean {
   }
 }
 
-function isCanvasRendererForced(): boolean {
+function shouldUseWebglDetail(): boolean {
   try {
     const params = new URLSearchParams(window.location.search);
-    return params.get('renderer') === 'canvas';
+    return params.get('renderer') === 'webgl';
   } catch (_error) {
     return false;
   }
@@ -174,6 +177,39 @@ function clusterDisplayName(clusterId: string, payload: VisualizerPayload): stri
   return clusterId.replace('cluster::', '');
 }
 
+function pickClusterActionNode(boardModel: BoardModel | null, boardModelV2: BoardModelV2 | null, clusterId: string): string {
+  if (clusterId.trim() === '') return '';
+  if (boardModelV2 != null) {
+    const lane = boardModelV2.lanes.find((item) => String(item.id) === clusterId);
+    if (lane != null && Array.isArray(lane.cards) && lane.cards.length > 0) {
+      const sorted = [...lane.cards].sort((a, b) => {
+        const aDegree = Number(a.stats?.in ?? 0) + Number(a.stats?.out ?? 0);
+        const bDegree = Number(b.stats?.in ?? 0) + Number(b.stats?.out ?? 0);
+        if (bDegree !== aDegree) return bDegree - aDegree;
+        return String(a.title).localeCompare(String(b.title));
+      });
+      return String(sorted[0]?.id ?? '').trim();
+    }
+  }
+  if (boardModel == null) return '';
+  const hotspot = (boardModel.hotspots ?? []).find((item) => String(item.cluster_id ?? '') === clusterId);
+  if (hotspot && String(hotspot.node_id).trim() !== '') return String(hotspot.node_id);
+  const cluster = (boardModel.clusters ?? []).find((item) => item.id === clusterId);
+  if (cluster == null || !Array.isArray(cluster.cards) || cluster.cards.length === 0) return '';
+  const sorted = [...cluster.cards].sort((a, b) => {
+    const aDegree = Number(a.stats?.in ?? 0) + Number(a.stats?.out ?? 0);
+    const bDegree = Number(b.stats?.in ?? 0) + Number(b.stats?.out ?? 0);
+    if (bDegree !== aDegree) return bDegree - aDegree;
+    return String(a.title).localeCompare(String(b.title));
+  });
+  return String(sorted[0]?.id ?? '').trim();
+}
+
+function pickBestClusterId(clusterCards: Array<{ id: string }>, selectedClusterId: string): string {
+  if (selectedClusterId.trim() !== '') return selectedClusterId;
+  return String(clusterCards[0]?.id ?? '').trim();
+}
+
 function getBoardModel(payload: VisualizerPayload): BoardModel | null {
   const fromView = payload.view_model?.board_model;
   if (fromView && Array.isArray(fromView.clusters) && Array.isArray(fromView.links) && Array.isArray(fromView.hotspots)) {
@@ -186,69 +222,651 @@ function getBoardModel(payload: VisualizerPayload): BoardModel | null {
   return null;
 }
 
-function boardFrameFromModel(boardModel: BoardModel, mode: VisualizerMode, selectedClusterId: string): RenderFrame['board'] {
-  const cardsLimit = mode === 'cluster' ? 8 : 220;
-  const clusterLookup = new Map(boardModel.clusters.map((cluster) => [cluster.id, cluster]));
+function getBoardModelV2(payload: VisualizerPayload): BoardModelV2 | null {
+  const fromView = payload.view_model?.board_model_v2;
+  if (fromView && Array.isArray(fromView.lanes) && Array.isArray(fromView.links) && Array.isArray(fromView.legend)) {
+    return fromView;
+  }
+  const fromBundle = payload.graph_bundle?.board_model_v2;
+  if (fromBundle && Array.isArray(fromBundle.lanes) && Array.isArray(fromBundle.links) && Array.isArray(fromBundle.legend)) {
+    return fromBundle;
+  }
+  return null;
+}
 
-  let clusters = boardModel.clusters;
-  if (mode === 'structural') {
-    const focusCluster = selectedClusterId || boardModel.clusters[0]?.id || '';
-    if (focusCluster !== '') {
-      const connected = new Set<string>([focusCluster]);
-      for (const link of boardModel.links) {
-        if (link.source_cluster === focusCluster) connected.add(link.target_cluster);
-        if (link.target_cluster === focusCluster) connected.add(link.source_cluster);
+function legendColorForType(edgeType: string, legend: BoardV2LegendItem[]): string {
+  const item = legend.find((row) => String(row.edge_type) === edgeType);
+  if (item != null && String(item.color).trim() !== '') return String(item.color);
+  if (edgeType === 'extends') return '#8ad29a';
+  if (edgeType === 'emits') return '#f3b06d';
+  if (edgeType === 'loads') return '#b7a2ff';
+  if (edgeType === 'calls') return '#ff8e74';
+  return '#6bc8ff';
+}
+
+function dominantEdgeType(typeBreakdown: Record<string, number>): string {
+  const entries = Object.entries(typeBreakdown ?? {});
+  if (entries.length === 0) return 'contains';
+  entries.sort((a, b) => Number(b[1]) - Number(a[1]));
+  return String(entries[0][0] ?? 'contains');
+}
+
+function legendStyleForType(edgeType: string, legend: BoardV2LegendItem[]): string {
+  const item = legend.find((row) => String(row.edge_type) === edgeType);
+  if (item != null && String(item.style).trim() !== '') return String(item.style);
+  if (edgeType === 'emits') return 'dashed';
+  if (edgeType === 'loads') return 'dotted';
+  return 'solid';
+}
+
+function defaultLegend(): BoardV2LegendItem[] {
+  return [
+    { edge_type: 'contains', label: 'Contains', color: '#6bc8ff', style: 'solid', default_visible: true },
+    { edge_type: 'extends', label: 'Extends', color: '#8ad29a', style: 'solid', default_visible: true },
+    { edge_type: 'emits', label: 'Emits', color: '#f3b06d', style: 'dashed', default_visible: false },
+    { edge_type: 'loads', label: 'Loads', color: '#b7a2ff', style: 'dotted', default_visible: false },
+    { edge_type: 'calls', label: 'Calls', color: '#ff8e74', style: 'solid', default_visible: false },
+  ];
+}
+
+function displayCardTitle(node: ViewModelNode, fallback: { label: string; path: string } | undefined): string {
+  const rawLabel = String(node.label ?? fallback?.label ?? '').trim();
+  if (rawLabel !== '' && rawLabel !== '(anonymous)') return rawLabel;
+  const path = String(node.path ?? fallback?.path ?? '').trim();
+  if (path !== '') {
+    const parts = path.split('/');
+    return String(parts[parts.length - 1] ?? path);
+  }
+  return String(node.id);
+}
+
+function boardFrameFromDetailVisible(args: {
+  visibleNodes: ViewModelNode[];
+  visibleEdges: ViewModelEdge[];
+  selectedNodeId: string;
+  selectedClusterId: string;
+  payload: VisualizerPayload;
+  nodeLookup: Map<string, { label: string; path: string; kind: string; clusterId: string }>;
+  legend: BoardV2LegendItem[];
+}): RenderFrame['board'] {
+  const { visibleNodes, visibleEdges, selectedNodeId, selectedClusterId, payload, nodeLookup, legend } = args;
+  const nodes = visibleNodes.filter((node) => String(node.kind) !== 'cluster');
+  const renderLegend = legend.map((item) => ({
+    edgeType: String(item.edge_type),
+    label: String(item.label),
+    color: String(item.color),
+    style: String(item.style),
+    defaultVisible: Boolean(item.default_visible),
+  }));
+  if (nodes.length === 0) return { clusters: [], links: [], legend: renderLegend };
+
+  const nodeById = new Map<string, ViewModelNode>();
+  for (const node of nodes) nodeById.set(String(node.id), node);
+  const nodeIdSet = new Set(nodes.map((node) => String(node.id)));
+  const adjacency = new Map<string, Set<string>>();
+  const directIn = new Set<string>();
+  const directOut = new Set<string>();
+  for (const edge of visibleEdges) {
+    const source = String(edge.source);
+    const target = String(edge.target);
+    if (!nodeIdSet.has(source) || !nodeIdSet.has(target)) continue;
+    if (!adjacency.has(source)) adjacency.set(source, new Set());
+    if (!adjacency.has(target)) adjacency.set(target, new Set());
+    adjacency.get(source)?.add(target);
+    adjacency.get(target)?.add(source);
+    if (source === selectedNodeId) directOut.add(target);
+    if (target === selectedNodeId) directIn.add(source);
+  }
+  const hopById = new Map<string, number>();
+  if (selectedNodeId !== '' && nodeIdSet.has(selectedNodeId)) {
+    const queue: Array<{ id: string; hop: number }> = [{ id: selectedNodeId, hop: 0 }];
+    hopById.set(selectedNodeId, 0);
+    while (queue.length > 0) {
+      const current = queue.shift() as { id: string; hop: number };
+      const neighbors = adjacency.get(current.id) ?? new Set<string>();
+      for (const next of neighbors) {
+        if (hopById.has(next)) continue;
+        const hop = current.hop + 1;
+        hopById.set(next, hop);
+        if (hop < 5) queue.push({ id: next, hop });
       }
-      clusters = boardModel.clusters.filter((cluster) => connected.has(cluster.id));
     }
   }
 
-  const clusterIds = new Set(clusters.map((cluster) => cluster.id));
-  const links = boardModel.links
-    .filter((link) => clusterIds.has(link.source_cluster) && clusterIds.has(link.target_cluster))
-    .map((link) => ({
-      sourceClusterId: link.source_cluster,
-      targetClusterId: link.target_cluster,
-      count: Number(link.count ?? 0),
-    }));
+  const relationForNode = (nodeId: string): { label: string; hop: number } => {
+    if (selectedNodeId === '') return { label: 'scope', hop: -1 };
+    if (nodeId === selectedNodeId) return { label: 'anchor', hop: 0 };
+    const hop = Number(hopById.get(nodeId) ?? -1);
+    if (hop === 1) {
+      const isIn = directIn.has(nodeId);
+      const isOut = directOut.has(nodeId);
+      if (isIn && isOut) return { label: '1-hop in/out', hop };
+      if (isIn) return { label: '1-hop in', hop };
+      if (isOut) return { label: '1-hop out', hop };
+      return { label: '1-hop', hop };
+    }
+    if (hop >= 2) return { label: `${hop}-hop`, hop };
+    return { label: 'related', hop };
+  };
 
-  const mappedClusters = clusters.map((cluster) => {
-    const cards = cluster.cards.slice(0, cardsLimit).map((card) => ({
-      id: card.id,
-      title: card.title,
-      kind: card.kind,
-      x: Number(card.x),
-      y: Number(card.y),
-      w: Number(card.w),
-      h: Number(card.h),
-      stats: {
-        inDegree: Number(card.stats?.in ?? 0),
-        outDegree: Number(card.stats?.out ?? 0),
-        loc: Number(card.stats?.loc ?? 0),
-      },
-    }));
-    const hiddenCards = Math.max(0, cluster.cards.length - cards.length);
-    const source = clusterLookup.get(cluster.id);
+  const sortedNodes = [...nodes].sort((a, b) => {
+    const aSelected = String(a.id) === selectedNodeId ? 1 : 0;
+    const bSelected = String(b.id) === selectedNodeId ? 1 : 0;
+    if (bSelected !== aSelected) return bSelected - aSelected;
+    const aDegree = Number(a.metrics?.in_degree ?? 0) + Number(a.metrics?.out_degree ?? 0);
+    const bDegree = Number(b.metrics?.in_degree ?? 0) + Number(b.metrics?.out_degree ?? 0);
+    if (bDegree !== aDegree) return bDegree - aDegree;
+    return displayCardTitle(a, nodeLookup.get(String(a.id))).localeCompare(
+      displayCardTitle(b, nodeLookup.get(String(b.id))),
+    );
+  });
+
+  const laneId = selectedClusterId !== '' ? selectedClusterId : `detail::${selectedNodeId || 'scope'}`;
+  const laneTitle = selectedClusterId !== ''
+    ? `${clusterDisplayName(selectedClusterId, payload)} · Detail`
+    : 'Detail scope';
+  const panelX = 40;
+  const panelY = 40;
+  const panelW = 1320;
+  const cardW = 260;
+  const cardH = 92;
+  const gapX = 16;
+  const gapY = 14;
+  const padX = 16;
+  const padY = 50;
+  const columns = Math.max(1, Math.floor((panelW - padX * 2 + gapX) / (cardW + gapX)));
+
+  const cards = sortedNodes.map((node, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const relation = relationForNode(String(node.id));
     return {
-      id: cluster.id,
-      title: cluster.title,
-      x: Number(cluster.rect.x),
-      y: Number(cluster.rect.y),
-      w: Number(cluster.rect.w),
-      h: Number(cluster.rect.h),
-      cards,
-      hiddenCards,
-      summary: {
-        nodeCount: Number(source?.summary?.node_count ?? cluster.cards.length),
-        externalCount: Number(source?.summary?.external_count ?? 0),
-        hot: Number(source?.summary?.hot ?? 0),
+      id: String(node.id),
+      title: displayCardTitle(node, nodeLookup.get(String(node.id))),
+      kind: String(node.kind),
+      path: String(node.path ?? nodeLookup.get(String(node.id))?.path ?? ''),
+      x: panelX + padX + col * (cardW + gapX),
+      y: panelY + padY + row * (cardH + gapY),
+      w: cardW,
+      h: cardH,
+      stats: {
+        inDegree: Number(node.metrics?.in_degree ?? 0),
+        outDegree: Number(node.metrics?.out_degree ?? 0),
+        loc: Number(node.metrics?.loc ?? 0),
+        functions: Number((node.metadata as Record<string, unknown> | undefined)?.function_count ?? 0),
+        classes: Number((node.metadata as Record<string, unknown> | undefined)?.class_count ?? 0),
+        signals: Number((node.metadata as Record<string, unknown> | undefined)?.signal_count ?? 0),
+        relation: relation.label,
+        hop: relation.hop,
       },
     };
   });
 
+  const nodeSet = new Set(cards.map((card) => card.id));
+  const links = visibleEdges
+    .filter((edge) => nodeSet.has(String(edge.source)) && nodeSet.has(String(edge.target)))
+    .slice(0, 420)
+    .map((edge) => {
+      const sourceNode = nodeById.get(String(edge.source));
+      const targetNode = nodeById.get(String(edge.target));
+      const sourceLookup = nodeLookup.get(String(edge.source));
+      const targetLookup = nodeLookup.get(String(edge.target));
+      const edgeType = String(edge.edge_type ?? 'contains');
+      const count = Number((edge.metadata as Record<string, unknown> | undefined)?.count ?? 1);
+      return {
+        id: String(edge.id || `${edge.source}->${edge.target}:${edgeType}`),
+        sourceClusterId: laneId,
+        targetClusterId: laneId,
+        sourceCardId: String(edge.source),
+        targetCardId: String(edge.target),
+        count: Math.max(1, count),
+        typeBreakdown: { [edgeType]: Math.max(1, count) },
+        evidenceRefs: [
+          {
+            source_node: String(edge.source),
+            target_node: String(edge.target),
+            edge_type: edgeType,
+            source_label: sourceNode ? displayCardTitle(sourceNode, sourceLookup) : String(sourceLookup?.label ?? edge.source),
+            target_label: targetNode ? displayCardTitle(targetNode, targetLookup) : String(targetLookup?.label ?? edge.target),
+            source_path: String(sourceNode?.path ?? sourceLookup?.path ?? ''),
+            target_path: String(targetNode?.path ?? targetLookup?.path ?? ''),
+            source_line: Number((edge.metadata as Record<string, unknown> | undefined)?.source_line ?? -1),
+            target_line: Number((edge.metadata as Record<string, unknown> | undefined)?.target_line ?? -1),
+          },
+        ],
+        color: legendColorForType(edgeType, legend),
+        style: legendStyleForType(edgeType, legend),
+        defaultVisible: true,
+      };
+    });
+
+  const rows = Math.max(1, Math.ceil(cards.length / columns));
+  const panelH = Math.max(240, padY + rows * (cardH + gapY) + 24);
+
   return {
-    clusters: mappedClusters,
+    clusters: [
+      {
+        id: laneId,
+        title: laneTitle,
+        x: panelX,
+        y: panelY,
+        w: panelW,
+        h: panelH,
+        cards,
+        hiddenCards: 0,
+        summary: {
+          nodeCount: cards.length,
+          externalCount: links.length,
+          hot: 0,
+          fileCount: cards.filter((card) => card.kind === 'file').length,
+          functionCount: cards.filter((card) => card.kind === 'function').length,
+          classCount: cards.filter((card) => card.kind === 'class').length,
+        },
+      },
+    ],
     links,
+    legend: renderLegend,
+  };
+}
+
+function boardFrameFromModelV2(
+  boardModel: BoardModelV2,
+  mode: VisualizerMode,
+  selectedClusterId: string,
+  edgeTypeEnabled: Record<string, boolean>,
+  callsEnabled: boolean,
+  clusterPreviewCardLimit: number,
+): RenderFrame['board'] {
+  const sortedLanes = [...boardModel.lanes].sort((a, b) => {
+    const aSize = Number(a.summary?.file_count ?? a.cards.length);
+    const bSize = Number(b.summary?.file_count ?? b.cards.length);
+    return bSize - aSize;
+  });
+  const legend = [...boardModel.legend];
+
+  if (mode === 'cluster') {
+    const panelW = 420;
+    const panelH = 236;
+    const gapX = 24;
+    const gapY = 20;
+    const cols = sortedLanes.length <= 4 ? 2 : 3;
+    const externalByLane = new Map<string, number>();
+    for (const lane of sortedLanes) {
+      const laneId = String(lane.id);
+      const external = boardModel.links
+        .filter((link) => String(link.source_lane) === laneId || String(link.target_lane) === laneId)
+        .reduce((acc, item) => acc + Number(item.count ?? 0), 0);
+      externalByLane.set(laneId, external);
+    }
+
+    const clusters = sortedLanes.map((lane, index) => {
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const panelX = 40 + col * (panelW + gapX);
+      const panelY = 40 + row * (panelH + gapY);
+      const previewCards = [...lane.cards]
+        .sort((a, b) => {
+          const degreeA = Number(a.stats?.in ?? 0) + Number(a.stats?.out ?? 0);
+          const degreeB = Number(b.stats?.in ?? 0) + Number(b.stats?.out ?? 0);
+          if (degreeB !== degreeA) return degreeB - degreeA;
+          return String(a.title).localeCompare(String(b.title));
+        })
+        .slice(0, Math.max(1, clusterPreviewCardLimit))
+        .map((card, index) => {
+          const previewCol = index % 2;
+          const previewRow = Math.floor(index / 2);
+          const cardW = 192;
+          const cardH = 68;
+          return {
+            id: String(card.id),
+            title: String(card.title),
+            kind: String(card.kind),
+            path: String(card.path ?? ''),
+            x: panelX + 16 + previewCol * (cardW + 10),
+            y: panelY + 68 + previewRow * (cardH + 10),
+            w: cardW,
+            h: cardH,
+            stats: {
+              inDegree: Number(card.stats?.in ?? 0),
+              outDegree: Number(card.stats?.out ?? 0),
+              loc: Number(card.stats?.loc ?? 0),
+              functions: Number(card.stats?.functions ?? 0),
+              classes: Number(card.stats?.classes ?? 0),
+              signals: Number(card.stats?.signals ?? 0),
+            },
+          };
+        });
+      return {
+        id: String(lane.id),
+        title: String(lane.title),
+        x: panelX,
+        y: panelY,
+        w: panelW,
+        h: panelH,
+        cards: previewCards,
+        hiddenCards: Math.max(
+          0,
+          Number(lane.summary?.total_card_count ?? (Number(lane.hidden_items_count ?? 0) + Number(lane.cards.length)))
+            - previewCards.length,
+        ),
+        summary: {
+          nodeCount: Number(lane.summary?.node_count ?? lane.cards.length),
+          externalCount: Number(externalByLane.get(String(lane.id)) ?? 0),
+          hot: Number(lane.summary?.hot ?? 0),
+          fileCount: Number(lane.summary?.file_count ?? lane.cards.length),
+          functionCount: Number(lane.summary?.function_count ?? 0),
+          classCount: Number(lane.summary?.class_count ?? 0),
+        },
+      };
+    });
+    const laneIdSet = new Set(clusters.map((lane) => lane.id));
+    const links = boardModel.links
+      .filter((link) => laneIdSet.has(String(link.source_lane)) && laneIdSet.has(String(link.target_lane)))
+      .map((link) => {
+        const edgeType = dominantEdgeType(link.type_breakdown ?? {});
+        const legendItem = legend.find((row) => String(row.edge_type) === edgeType);
+        const defaultVisible = Boolean(legendItem?.default_visible ?? true);
+        const filterVisible =
+          typeof edgeTypeEnabled[edgeType] === 'boolean' ? Boolean(edgeTypeEnabled[edgeType]) : defaultVisible;
+        if ((edgeType === 'calls' && !callsEnabled) || !filterVisible) {
+          return null;
+        }
+        return {
+          id: String(link.id),
+          sourceClusterId: String(link.source_lane),
+          targetClusterId: String(link.target_lane),
+          count: Number(link.count ?? 0),
+          typeBreakdown: { ...(link.type_breakdown ?? {}) },
+          evidenceRefs: Array.isArray(link.evidence_refs) ? [...link.evidence_refs] : [],
+          color: legendColorForType(edgeType, legend),
+          style: String(legendItem?.style ?? 'solid'),
+          defaultVisible: Boolean(legendItem?.default_visible ?? true),
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item != null);
+    const renderLegend = legend.map((item) => ({
+      edgeType: String(item.edge_type),
+      label: String(item.label),
+      color: String(item.color),
+      style: String(item.style),
+      defaultVisible: Boolean(item.default_visible),
+    }));
+    return { clusters, links, legend: renderLegend };
+  }
+
+  const focusLaneId = selectedClusterId !== '' ? selectedClusterId : String(sortedLanes[0]?.id ?? '');
+  const focusLane = sortedLanes.find((lane) => String(lane.id) === focusLaneId);
+  if (focusLane == null) return { clusters: [], links: [], legend: [] };
+
+  const panelX = 40;
+  const panelY = 40;
+  const panelW = 1280;
+  const cardW = 248;
+  const cardH = 96;
+  const gapX = 16;
+  const gapY = 16;
+  const padX = 16;
+  const padY = 52;
+  const cardsLimit = Number.MAX_SAFE_INTEGER;
+  const columns = Math.max(1, Math.floor((panelW - padX * 2 + gapX) / (cardW + gapX)));
+  const cards = [...focusLane.cards]
+    .sort((a, b) => {
+      const degreeA = Number(a.stats?.in ?? 0) + Number(a.stats?.out ?? 0);
+      const degreeB = Number(b.stats?.in ?? 0) + Number(b.stats?.out ?? 0);
+      if (degreeB !== degreeA) return degreeB - degreeA;
+      return String(a.title).localeCompare(String(b.title));
+    })
+    .slice(0, cardsLimit)
+    .map((card, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      return {
+        id: String(card.id),
+        title: String(card.title),
+        kind: String(card.kind),
+        path: String(card.path ?? ''),
+        x: panelX + padX + col * (cardW + gapX),
+        y: panelY + padY + row * (cardH + gapY),
+        w: cardW,
+        h: cardH,
+        stats: {
+          inDegree: Number(card.stats?.in ?? 0),
+          outDegree: Number(card.stats?.out ?? 0),
+          loc: Number(card.stats?.loc ?? 0),
+          functions: Number(card.stats?.functions ?? 0),
+          classes: Number(card.stats?.classes ?? 0),
+          signals: Number(card.stats?.signals ?? 0),
+        },
+      };
+    });
+  const rows = Math.max(1, Math.ceil(cards.length / columns));
+  const panelH = Math.max(240, padY + rows * (cardH + gapY) + 24);
+  const links = boardModel.links
+    .filter((link) => String(link.source_lane) === String(focusLane.id) || String(link.target_lane) === String(focusLane.id))
+    .map((link) => {
+      const edgeType = dominantEdgeType(link.type_breakdown ?? {});
+      const legendItem = legend.find((row) => String(row.edge_type) === edgeType);
+      const defaultVisible = Boolean(legendItem?.default_visible ?? true);
+      const filterVisible =
+        typeof edgeTypeEnabled[edgeType] === 'boolean' ? Boolean(edgeTypeEnabled[edgeType]) : defaultVisible;
+      if ((edgeType === 'calls' && !callsEnabled) || !filterVisible) {
+        return null;
+      }
+      return {
+        id: String(link.id),
+        sourceClusterId: String(link.source_lane),
+        targetClusterId: String(link.target_lane),
+        count: Number(link.count ?? 0),
+        typeBreakdown: { ...(link.type_breakdown ?? {}) },
+        evidenceRefs: Array.isArray(link.evidence_refs) ? [...link.evidence_refs] : [],
+        color: legendColorForType(edgeType, legend),
+        style: String(legendItem?.style ?? 'solid'),
+        defaultVisible: Boolean(legendItem?.default_visible ?? true),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item != null);
+  const renderLegend = legend.map((item) => ({
+    edgeType: String(item.edge_type),
+    label: String(item.label),
+    color: String(item.color),
+    style: String(item.style),
+    defaultVisible: Boolean(item.default_visible),
+  }));
+
+  return {
+    clusters: [
+      {
+        id: String(focusLane.id),
+        title: String(focusLane.title),
+        x: panelX,
+        y: panelY,
+        w: panelW,
+        h: panelH,
+        cards,
+        hiddenCards: Math.max(
+          0,
+          Number(focusLane.summary?.total_card_count ?? (Number(focusLane.hidden_items_count ?? 0) + Number(focusLane.cards.length)))
+            - cards.length,
+        ),
+        summary: {
+          nodeCount: Number(focusLane.summary?.node_count ?? focusLane.cards.length),
+          externalCount: links.reduce((acc, item) => acc + Number(item.count), 0),
+          hot: Number(focusLane.summary?.hot ?? 0),
+          fileCount: Number(focusLane.summary?.file_count ?? focusLane.cards.length),
+          functionCount: Number(focusLane.summary?.function_count ?? 0),
+          classCount: Number(focusLane.summary?.class_count ?? 0),
+        },
+      },
+    ],
+    links,
+    legend: renderLegend,
+  };
+}
+
+function boardFrameFromModel(boardModel: BoardModel, mode: VisualizerMode, selectedClusterId: string): RenderFrame['board'] {
+  const sortedClusters = [...boardModel.clusters].sort((a, b) => {
+    const aSize = Number(a.summary?.node_count ?? a.cards.length);
+    const bSize = Number(b.summary?.node_count ?? b.cards.length);
+    return bSize - aSize;
+  });
+
+  if (mode === 'cluster') {
+    const panelW = 430;
+    const panelH = 210;
+    const gapX = 36;
+    const gapY = 28;
+    const cols = Math.max(2, Math.min(3, Math.ceil(Math.sqrt(sortedClusters.length || 1))));
+
+    const clusters = sortedClusters.map((cluster, index) => {
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const x = 40 + col * (panelW + gapX);
+      const y = 40 + row * (panelH + gapY);
+      const previewCards = [...cluster.cards]
+        .filter((card) => card.kind !== 'function')
+        .slice(0, 4)
+        .map((card, cardIndex) => {
+          const previewCol = cardIndex % 2;
+          const previewRow = Math.floor(cardIndex / 2);
+          const cardW = 184;
+          const cardH = 44;
+          return {
+            id: card.id,
+            title: card.title,
+            kind: card.kind,
+            x: x + 16 + previewCol * (cardW + 10),
+            y: y + 68 + previewRow * (cardH + 8),
+            w: cardW,
+            h: cardH,
+            path: card.path,
+            stats: {
+              inDegree: Number(card.stats?.in ?? 0),
+              outDegree: Number(card.stats?.out ?? 0),
+              loc: Number(card.stats?.loc ?? 0),
+              functions: Number(card.stats?.functions ?? 0),
+              classes: Number(card.stats?.classes ?? 0),
+              signals: Number(card.stats?.signals ?? 0),
+            },
+          };
+        });
+
+      return {
+        id: cluster.id,
+        title: cluster.title,
+        x,
+        y,
+        w: panelW,
+        h: panelH,
+        cards: previewCards,
+        hiddenCards: Math.max(0, Number(cluster.summary?.file_count ?? cluster.cards.length) - previewCards.length),
+        summary: {
+          nodeCount: Number(cluster.summary?.node_count ?? cluster.cards.length),
+          externalCount: Number(cluster.summary?.external_count ?? 0),
+          hot: Number(cluster.summary?.hot ?? 0),
+          fileCount: Number(cluster.summary?.file_count ?? cluster.cards.length),
+          functionCount: Number(cluster.summary?.function_count ?? 0),
+          classCount: Number(cluster.summary?.class_count ?? 0),
+        },
+      };
+    });
+
+    const clusterIds = new Set(clusters.map((cluster) => cluster.id));
+    const links = boardModel.links
+      .filter((link) => clusterIds.has(link.source_cluster) && clusterIds.has(link.target_cluster))
+      .map((link) => ({
+        sourceClusterId: link.source_cluster,
+        targetClusterId: link.target_cluster,
+        count: Number(link.count ?? 0),
+      }));
+
+    return { clusters, links };
+  }
+
+  const focusClusterId =
+    selectedClusterId !== ''
+      ? selectedClusterId
+      : sortedClusters[0]?.id ?? '';
+  const focusCluster = sortedClusters.find((cluster) => cluster.id === focusClusterId);
+  if (focusCluster == null) {
+    return { clusters: [], links: [] };
+  }
+
+  const panelX = 40;
+  const panelY = 40;
+  const panelW = 1280;
+  const cardW = 248;
+  const cardH = 88;
+  const gapX = 16;
+  const gapY = 14;
+  const padX = 16;
+  const padY = 48;
+  const cardsLimit = 24;
+  const columns = Math.max(1, Math.floor((panelW - padX * 2 + gapX) / (cardW + gapX)));
+
+  const priorityKinds = new Set(['file', 'class', 'scene', 'resource', 'signal', 'system', 'entity', 'node']);
+  const nonFunction = focusCluster.cards.filter((card) => card.kind !== 'function');
+  const sourceCards = nonFunction.length > 0 ? nonFunction : [...focusCluster.cards];
+  const cards = sourceCards
+    .map((card) => {
+      const degree = Number(card.stats?.in ?? 0) + Number(card.stats?.out ?? 0);
+      const kind = String(card.kind ?? 'unknown');
+      const kindRank = priorityKinds.has(kind) ? 0 : kind === 'function' ? 2 : 1;
+      return { card, degree, kindRank };
+    })
+    .sort((a, b) => {
+      if (a.kindRank !== b.kindRank) return a.kindRank - b.kindRank;
+      if (b.degree !== a.degree) return b.degree - a.degree;
+      return String(a.card.title).localeCompare(String(b.card.title));
+    })
+    .slice(0, cardsLimit)
+    .map(({ card }, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      return {
+        id: card.id,
+        title: card.title,
+        kind: card.kind,
+        path: card.path,
+        x: panelX + padX + col * (cardW + gapX),
+        y: panelY + padY + row * (cardH + gapY),
+        w: cardW,
+        h: cardH,
+        stats: {
+          inDegree: Number(card.stats?.in ?? 0),
+          outDegree: Number(card.stats?.out ?? 0),
+          loc: Number(card.stats?.loc ?? 0),
+          functions: Number(card.stats?.functions ?? 0),
+          classes: Number(card.stats?.classes ?? 0),
+          signals: Number(card.stats?.signals ?? 0),
+        },
+      };
+    });
+  const rows = Math.max(1, Math.ceil(cards.length / columns));
+  const panelH = Math.max(220, padY + rows * (cardH + gapY) + 24);
+  const totalFileCards = Number(focusCluster.summary?.file_count ?? focusCluster.cards.length);
+
+  return {
+    clusters: [
+      {
+        id: focusCluster.id,
+        title: focusCluster.title,
+        x: panelX,
+        y: panelY,
+        w: panelW,
+        h: panelH,
+        cards,
+        hiddenCards: Math.max(0, totalFileCards - cards.length),
+        summary: {
+          nodeCount: Number(focusCluster.summary?.node_count ?? focusCluster.cards.length),
+          externalCount: Number(focusCluster.summary?.external_count ?? 0),
+          hot: Number(focusCluster.summary?.hot ?? 0),
+          fileCount: Number(focusCluster.summary?.file_count ?? focusCluster.cards.length),
+          functionCount: Number(focusCluster.summary?.function_count ?? 0),
+          classCount: Number(focusCluster.summary?.class_count ?? 0),
+        },
+      },
+    ],
+    links: [],
   };
 }
 
@@ -259,12 +877,14 @@ export function App() {
   const searchRef = useRef<HTMLInputElement | null>(null);
   const minimapRef = useRef<HTMLCanvasElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const autoSelectedClusterRef = useRef('');
 
   const [fps, setFps] = useState(0);
   const [rendererBackend, setRendererBackend] = useState<RendererBackend>('board_canvas');
   const [rendererErrorCode, setRendererErrorCode] = useState('none');
   const [rendererError, setRendererError] = useState('');
   const [clusterSort, setClusterSort] = useState<'size' | 'external' | 'hot'>('size');
+  const [selectedLinkId, setSelectedLinkId] = useState('');
 
   const payload = useVisualizerStore((state) => state.payload);
   const bundle = useVisualizerStore((state) => state.bundle);
@@ -287,6 +907,8 @@ export function App() {
   const rawJsonOpen = useVisualizerStore((state) => state.rawJsonOpen);
   const overlay = useVisualizerStore((state) => state.overlay);
   const diagnosticsCollapsed = useVisualizerStore((state) => state.diagnosticsCollapsed);
+  const lastNavigationReason = useVisualizerStore((state) => state.lastNavigationReason);
+  const structuralExpandedLaneId = useVisualizerStore((state) => state.structuralExpandedLaneId);
 
   const setMode = useVisualizerStore((state) => state.setMode);
   const setSearchQuery = useVisualizerStore((state) => state.setSearchQuery);
@@ -307,6 +929,31 @@ export function App() {
 
   const nodeLookup = useNodeLookup(bundle);
   const boardModel = useMemo(() => getBoardModel(payload), [payload]);
+  const boardModelV2 = useMemo(() => getBoardModelV2(payload), [payload]);
+  const uiDefaults = useMemo(() => {
+    return {
+      detailRequiresAnchor: Boolean(
+        bundle?.ui_defaults?.detail_requires_anchor
+          ?? viewModel?.ui_defaults?.detail_requires_anchor
+          ?? true,
+      ),
+      structuralAutoselect: String(
+        bundle?.ui_defaults?.structural_autoselect
+          ?? viewModel?.ui_defaults?.structural_autoselect
+          ?? 'top_file_card',
+      ),
+      clusterPreviewCardLimit: Number(
+        bundle?.ui_defaults?.cluster_preview_card_limit
+          ?? viewModel?.ui_defaults?.cluster_preview_card_limit
+          ?? 4,
+      ),
+      structuralShowAllOnMore: Boolean(
+        bundle?.ui_defaults?.structural_show_all_on_more
+          ?? viewModel?.ui_defaults?.structural_show_all_on_more
+          ?? true,
+      ),
+    };
+  }, [bundle?.ui_defaults, viewModel?.ui_defaults]);
 
   const visible = useMemo(() => {
     if (viewModel == null) return { nodes: [], edges: [], sampled: false };
@@ -330,7 +977,26 @@ export function App() {
   }, [viewModel, nodeLookup, selectedNodeId]);
 
   const selectedClusterSummary = useMemo(() => {
-    if (boardModel == null || selectedClusterId === '') return null;
+    if (selectedClusterId === '') return null;
+    if (boardModelV2 != null) {
+      const lane = boardModelV2.lanes.find((item) => String(item.id) === selectedClusterId);
+      if (lane != null) {
+        return {
+          title: String(lane.title),
+          nodeCount: Number(lane.summary?.node_count ?? lane.cards.length),
+          externalCount: Number(
+            boardModelV2.links
+              .filter((link) => String(link.source_lane) === selectedClusterId || String(link.target_lane) === selectedClusterId)
+              .reduce((acc, item) => acc + Number(item.count ?? 0), 0),
+          ),
+          hot: Number(lane.summary?.hot ?? 0),
+          fileCount: Number(lane.summary?.file_count ?? lane.cards.length),
+          functionCount: Number(lane.summary?.function_count ?? 0),
+          classCount: Number(lane.summary?.class_count ?? 0),
+        };
+      }
+    }
+    if (boardModel == null) return null;
     const cluster = boardModel.clusters.find((item) => item.id === selectedClusterId);
     if (cluster == null) return null;
     return {
@@ -338,28 +1004,90 @@ export function App() {
       nodeCount: Number(cluster.summary?.node_count ?? cluster.cards.length),
       externalCount: Number(cluster.summary?.external_count ?? 0),
       hot: Number(cluster.summary?.hot ?? 0),
+      fileCount: Number(cluster.summary?.file_count ?? cluster.cards.length),
+      functionCount: Number(cluster.summary?.function_count ?? 0),
+      classCount: Number(cluster.summary?.class_count ?? 0),
     };
-  }, [boardModel, selectedClusterId]);
+  }, [boardModel, boardModelV2, selectedClusterId]);
+
+  const selectedClusterTopCards = useMemo(() => {
+    if (selectedClusterId.trim() === '') return [];
+    const sourceCards = (() => {
+      if (boardModelV2 != null) {
+        const lane = boardModelV2.lanes.find((item) => String(item.id) === selectedClusterId);
+        if (lane != null) return lane.cards.map((card) => ({
+          id: String(card.id),
+          title: String(card.title),
+          kind: String(card.kind),
+          path: String(card.path ?? ''),
+          stats: { in: Number(card.stats?.in ?? 0), out: Number(card.stats?.out ?? 0), functions: Number(card.stats?.functions ?? 0), classes: Number(card.stats?.classes ?? 0) },
+        }));
+      }
+      if (boardModel == null) return [];
+      const cluster = boardModel.clusters.find((item) => item.id === selectedClusterId);
+      return cluster?.cards ?? [];
+    })();
+    return [...sourceCards]
+      .map((card) => {
+        const degree = Number(card.stats?.in ?? 0) + Number(card.stats?.out ?? 0);
+        const functions = Number(card.stats?.functions ?? 0);
+        const classes = Number(card.stats?.classes ?? 0);
+        return { card, degree, functions, classes };
+      })
+      .sort((a, b) => {
+        if (b.degree !== a.degree) return b.degree - a.degree;
+        if (b.functions !== a.functions) return b.functions - a.functions;
+        if (b.classes !== a.classes) return b.classes - a.classes;
+        return String(a.card.title).localeCompare(String(b.card.title));
+      })
+      .slice(0, 5)
+      .map((entry) => entry.card);
+  }, [boardModel, boardModelV2, selectedClusterId]);
 
   const clusterCards = useMemo(() => {
-    if (bundle == null) return [];
-    const pool = bundle.string_pool ?? [];
-    const items = (bundle.clusters ?? []).map((cluster) => ({
-      id: cluster.id,
-      label: String(pool[cluster.label_i] ?? cluster.id),
-      size: Number(cluster.metrics?.size ?? cluster.node_ids.length),
-      external: Number(cluster.metrics?.external_w ?? 0),
-      hot: Number(cluster.metrics?.hot ?? 0),
-    }));
+    let items: Array<{ id: string; label: string; size: number; external: number; hot: number }> = [];
+    if (boardModelV2 != null) {
+      items = boardModelV2.lanes.map((lane) => ({
+        id: String(lane.id),
+        label: String(lane.title),
+        size: Number(lane.summary?.file_count ?? lane.cards.length),
+        external: Number(
+          boardModelV2.links
+            .filter((link) => String(link.source_lane) === String(lane.id) || String(link.target_lane) === String(lane.id))
+            .reduce((acc, item) => acc + Number(item.count ?? 0), 0),
+        ),
+        hot: Number(lane.summary?.hot ?? 0),
+      }));
+    } else if (bundle != null) {
+      const pool = bundle.string_pool ?? [];
+      items = (bundle.clusters ?? []).map((cluster) => ({
+        id: cluster.id,
+        label: String(pool[cluster.label_i] ?? cluster.id),
+        size: Number(cluster.metrics?.size ?? cluster.node_ids.length),
+        external: Number(cluster.metrics?.external_w ?? 0),
+        hot: Number(cluster.metrics?.hot ?? 0),
+      }));
+    }
+
     const sorters = {
       size: (a: (typeof items)[number], b: (typeof items)[number]) => b.size - a.size,
       external: (a: (typeof items)[number], b: (typeof items)[number]) => b.external - a.external,
       hot: (a: (typeof items)[number], b: (typeof items)[number]) => b.hot - a.hot,
     };
     return items.sort(sorters[clusterSort]);
-  }, [bundle, clusterSort]);
+  }, [bundle, boardModelV2, clusterSort]);
 
   const hubCandidates = useMemo(() => {
+    if (boardModelV2 != null) {
+      const rows = boardModelV2.lanes.flatMap((lane) =>
+        lane.cards.map((card) => ({
+          id: String(card.id),
+          label: String(card.title),
+          degree: Number(card.stats?.in ?? 0) + Number(card.stats?.out ?? 0),
+        })),
+      );
+      return rows.sort((a, b) => b.degree - a.degree).slice(0, 5);
+    }
     const hotspots = boardModel?.hotspots ?? [];
     if (hotspots.length > 0) {
       return hotspots.slice(0, 5).map((item) => ({
@@ -378,7 +1106,7 @@ export function App() {
       }))
       .sort((a, b) => b.degree - a.degree)
       .slice(0, 5);
-  }, [boardModel, viewModel]);
+  }, [boardModel, boardModelV2, viewModel]);
 
   const runtimeDiagnostics = useMemo(() => {
     const diagnostics = payload.meta?.runtime_diagnostics;
@@ -396,10 +1124,137 @@ export function App() {
   }, [viewModel?.cluster_layout_health]);
 
   const boardFrame = useMemo(() => {
+    const baseLegend = boardModelV2?.legend ?? defaultLegend();
+    if (mode === 'detail') {
+      return boardFrameFromDetailVisible({
+        visibleNodes: visible.nodes,
+        visibleEdges: visible.edges,
+        selectedNodeId,
+        selectedClusterId,
+        payload,
+        nodeLookup,
+        legend: baseLegend,
+      });
+    }
+    if (boardModelV2 != null) {
+      return boardFrameFromModelV2(
+        boardModelV2,
+        mode,
+        selectedClusterId,
+        edgeTypeEnabled,
+        callsEnabled,
+        Math.max(1, uiDefaults.clusterPreviewCardLimit),
+      );
+    }
     if (boardModel == null) return undefined;
-    if (mode === 'detail') return undefined;
     return boardFrameFromModel(boardModel, mode, selectedClusterId);
-  }, [boardModel, mode, selectedClusterId]);
+  }, [
+    boardModel,
+    boardModelV2,
+    mode,
+    selectedClusterId,
+    edgeTypeEnabled,
+    callsEnabled,
+    uiDefaults.clusterPreviewCardLimit,
+    visible.nodes,
+    visible.edges,
+    selectedNodeId,
+    payload,
+    nodeLookup,
+  ]);
+
+  const activeLegend = useMemo(() => {
+    if (boardFrame?.legend == null) return [];
+    return boardFrame.legend;
+  }, [boardFrame?.legend]);
+
+  const laneTitleById = useMemo(() => {
+    const mapping = new Map<string, string>();
+    if (boardModelV2 != null) {
+      for (const lane of boardModelV2.lanes) {
+        mapping.set(String(lane.id), String(lane.title));
+      }
+    }
+    for (const cluster of boardFrame?.clusters ?? []) {
+      mapping.set(String(cluster.id), String(cluster.title));
+    }
+    return mapping;
+  }, [boardModelV2, boardFrame?.clusters]);
+
+  const selectedLinkSummary = useMemo(() => {
+    if (selectedLinkId.trim() === '') return null;
+    const links = boardFrame?.links ?? [];
+    const link = links.find((item) => String(item.id) === selectedLinkId);
+    if (link == null) return null;
+    const firstEvidence = Array.isArray(link.evidenceRefs) && link.evidenceRefs.length > 0
+      ? (link.evidenceRefs[0] as Record<string, unknown>)
+      : null;
+    const sourceCardId = typeof link.sourceCardId === 'string' ? link.sourceCardId : '';
+    const targetCardId = typeof link.targetCardId === 'string' ? link.targetCardId : '';
+    const sourceNode = sourceCardId !== '' ? viewModel?.nodesById?.[sourceCardId] : undefined;
+    const targetNode = targetCardId !== '' ? viewModel?.nodesById?.[targetCardId] : undefined;
+    const typeBreakdown = { ...(link.typeBreakdown ?? {}) };
+    const typeEntries = Object.entries(typeBreakdown).sort((a, b) => Number(b[1]) - Number(a[1]));
+    const dominantType = String(typeEntries[0]?.[0] ?? 'contains');
+    const sourceTitle = sourceCardId !== ''
+      ? String(
+        firstEvidence?.source_label
+          ?? sourceNode?.label
+          ?? nodeLookup.get(sourceCardId)?.label
+          ?? sourceCardId,
+      )
+      : laneTitleById.get(String(link.sourceClusterId)) ?? String(link.sourceClusterId);
+    const targetTitle = targetCardId !== ''
+      ? String(
+        firstEvidence?.target_label
+          ?? targetNode?.label
+          ?? nodeLookup.get(targetCardId)?.label
+          ?? targetCardId,
+      )
+      : laneTitleById.get(String(link.targetClusterId)) ?? String(link.targetClusterId);
+    return {
+      id: String(link.id),
+      source: String(link.sourceClusterId),
+      target: String(link.targetClusterId),
+      sourceTitle,
+      targetTitle,
+      count: Number(link.count ?? 0),
+      typeBreakdown,
+      dominantType,
+      evidenceRefs: Array.isArray(link.evidenceRefs) ? [...link.evidenceRefs] : [],
+    };
+  }, [boardFrame?.links, laneTitleById, selectedLinkId, viewModel?.nodesById, nodeLookup]);
+
+  const selectedNodeScopeReason = useMemo(() => {
+    if (selectedNodeId.trim() === '') return '';
+    for (const cluster of boardFrame?.clusters ?? []) {
+      const card = cluster.cards.find((item) => String(item.id) === selectedNodeId);
+      if (card != null && typeof card.stats.relation === 'string') {
+        return String(card.stats.relation);
+      }
+    }
+    return '';
+  }, [boardFrame?.clusters, selectedNodeId]);
+
+  const detailScopeSummary = useMemo(() => {
+    if (mode !== 'detail') return '';
+    const counter = new Map<string, number>();
+    for (const cluster of boardFrame?.clusters ?? []) {
+      for (const card of cluster.cards) {
+        const relation = String(card.stats.relation ?? 'related');
+        counter.set(relation, Number(counter.get(relation) ?? 0) + 1);
+      }
+    }
+    const prioritized = ['anchor', '1-hop in', '1-hop out', '1-hop in/out', '2-hop', '3-hop', '4-hop', 'related'];
+    const entries = Array.from(counter.entries());
+    entries.sort((a, b) => {
+      const ai = prioritized.indexOf(a[0]);
+      const bi = prioritized.indexOf(b[0]);
+      if (ai !== bi) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+      return Number(b[1]) - Number(a[1]);
+    });
+    return entries.map(([key, value]) => `${key} ${value}`).join(' · ');
+  }, [mode, boardFrame?.clusters]);
 
   const renderFrame = useMemo<RenderFrame>(() => {
     if (boardFrame != null) {
@@ -410,6 +1265,7 @@ export function App() {
         board: boardFrame,
         selectedNodeId,
         selectedClusterId,
+        selectedLinkId,
       };
     }
 
@@ -439,39 +1295,59 @@ export function App() {
       })),
       selectedNodeId,
       selectedClusterId,
+      selectedLinkId,
     };
-  }, [boardFrame, mode, selectedNodeId, selectedClusterId, visible.nodes, visible.edges, nodeLookup]);
+  }, [boardFrame, mode, selectedNodeId, selectedClusterId, selectedLinkId, visible.nodes, visible.edges, nodeLookup]);
 
   const createRendererCallbacks = (): GraphRendererCallbacks => ({
     onNodeClick: (nodeId: string) => {
+      setSelectedLinkId('');
       const state = useVisualizerStore.getState();
       const vmNode = state.viewModel?.nodesById?.[nodeId];
       if (vmNode?.kind === 'cluster' || nodeId.startsWith('cluster::')) {
-        state.drillToCluster(nodeId);
+        state.drillToCluster(nodeId, 'cluster_click');
       } else {
         state.selectNode(nodeId);
       }
     },
     onNodeDoubleClick: (nodeId: string) => {
+      setSelectedLinkId('');
       const state = useVisualizerStore.getState();
       const vmNode = state.viewModel?.nodesById?.[nodeId];
       if (vmNode?.kind === 'cluster' || nodeId.startsWith('cluster::')) {
-        state.drillToCluster(nodeId);
+        state.drillToCluster(nodeId, 'cluster_click');
       } else {
-        state.drillToDetail(nodeId, 2);
+        state.drillToDetail(nodeId, 2, 'manual_mode');
       }
     },
+    onMoreClick: (clusterId: string) => {
+      setSelectedLinkId('');
+      const state = useVisualizerStore.getState();
+      state.drillToCluster(clusterId, 'more_click');
+    },
+    onEdgeClick: (edgeId: string) => {
+      setSelectedLinkId(edgeId);
+    },
     onStageClick: () => {
-      useVisualizerStore.setState({ selectedNodeId: '', selectedClusterId: '' });
+      setSelectedLinkId('');
+      useVisualizerStore.setState((state) => {
+        if (state.mode === 'detail') {
+          return {};
+        }
+        return {
+          selectedNodeId: '',
+          selectedClusterId: state.mode === 'cluster' ? '' : state.selectedClusterId,
+        };
+      });
     },
   });
 
   const buildDetailRenderer = (
     host: HTMLElement,
     callbacks: GraphRendererCallbacks,
-    forceCanvas: boolean,
+    allowWebgl: boolean,
   ): GraphRenderer | null => {
-    if (!forceCanvas && supportsWebGL()) {
+    if (allowWebgl && supportsWebGL()) {
       try {
         const sigma = new SigmaRenderer(callbacks);
         sigma.init(host);
@@ -491,7 +1367,7 @@ export function App() {
       const canvas = new Canvas2DRenderer(callbacks);
       canvas.init(host);
       setRendererBackend('canvas2d_fallback');
-      if (forceCanvas) {
+      if (!allowWebgl) {
         setRendererErrorCode('none');
         setRendererError('');
       }
@@ -514,18 +1390,8 @@ export function App() {
     if (host == null) return;
 
     const callbacks = rendererCallbacksRef.current ?? createRendererCallbacks();
-    const forceCanvas = isCanvasRendererForced();
-
     rendererRef.current?.destroy();
     rendererRef.current = null;
-
-    if (mode === 'detail') {
-      rendererRef.current = buildDetailRenderer(host, callbacks, forceCanvas);
-      return () => {
-        rendererRef.current?.destroy();
-        rendererRef.current = null;
-      };
-    }
 
     try {
       const board = new BoardRenderer(callbacks);
@@ -536,7 +1402,7 @@ export function App() {
       setRendererError('');
     } catch (error) {
       const message = String(error);
-      rendererRef.current = buildDetailRenderer(host, callbacks, true);
+      rendererRef.current = buildDetailRenderer(host, callbacks, shouldUseWebglDetail());
       setRendererErrorCode(classifyRendererError(message));
       setRendererError(message);
     }
@@ -556,6 +1422,10 @@ export function App() {
     const timer = window.setTimeout(() => setToast(''), 2400);
     return () => window.clearTimeout(timer);
   }, [toast, setToast]);
+
+  useEffect(() => {
+    setSelectedLinkId('');
+  }, [mode, selectedClusterId]);
 
   useEffect(() => {
     if (bundle == null) return;
@@ -648,7 +1518,7 @@ export function App() {
       if (mode === 'detail' && renderer.backend === 'webgl_sigma' && graphHostRef.current != null) {
         const callbacks = rendererCallbacksRef.current ?? createRendererCallbacks();
         rendererRef.current?.destroy();
-        rendererRef.current = buildDetailRenderer(graphHostRef.current, callbacks, true);
+        rendererRef.current = buildDetailRenderer(graphHostRef.current, callbacks, false);
       }
       return;
     }
@@ -656,7 +1526,7 @@ export function App() {
     if (selectedNodeId !== '') {
       const focused = renderer.focusNode(selectedNodeId, 0.42);
       if (!focused && mode !== 'detail') {
-        drillToDetail(selectedNodeId, 2);
+        drillToDetail(selectedNodeId, 2, 'manual_mode');
       }
       return;
     }
@@ -670,8 +1540,26 @@ export function App() {
   }, [renderFrame, viewModel, selectedNodeId, selectedClusterId, mode, drillToDetail]);
 
   useEffect(() => {
+    if (mode !== 'structural') return;
+    if (uiDefaults.structuralAutoselect !== 'top_file_card') return;
+    if (selectedClusterId.trim() === '') return;
+    if (selectedNodeId.trim() !== '') return;
+
+    const stateKey = `${mode}:${selectedClusterId}`;
+    if (autoSelectedClusterRef.current === stateKey) return;
+    const candidate = pickClusterActionNode(boardModel, boardModelV2, selectedClusterId);
+    if (candidate === '') return;
+
+    autoSelectedClusterRef.current = stateKey;
+    selectNode(candidate);
+    window.requestAnimationFrame(() => {
+      rendererRef.current?.focusNode(candidate, 0.46);
+    });
+  }, [mode, selectedClusterId, selectedNodeId, boardModel, boardModelV2, selectNode, uiDefaults.structuralAutoselect]);
+
+  useEffect(() => {
     const canvas = minimapRef.current;
-    if (canvas == null || mode !== 'detail') return;
+    if (canvas == null || mode !== 'detail' || boardFrame != null) return;
     const ctx = canvas.getContext('2d');
     if (ctx == null) return;
 
@@ -707,18 +1595,18 @@ export function App() {
     }
     ctx.strokeStyle = '#2f5aa0';
     ctx.strokeRect(1, 1, width - 2, height - 2);
-  }, [mode, visible.nodes, selectedNodeId]);
+  }, [mode, visible.nodes, selectedNodeId, boardFrame]);
 
   const onSearchFocus = (item: SearchResultItem) => {
     const clusterId = nodeLookup.get(item.nodeId)?.clusterId ?? '';
     if (mode === 'cluster' && clusterId !== '') {
-      drillToCluster(clusterId);
+      drillToCluster(clusterId, 'search_focus');
     }
     selectNode(item.nodeId);
     setSearchIndex(Math.max(0, searchResults.findIndex((row) => row.nodeId === item.nodeId)));
     const focused = rendererRef.current?.focusNode(item.nodeId, 0.4) ?? false;
     if (!focused) {
-      drillToDetail(item.nodeId, 2);
+      drillToDetail(item.nodeId, 2, 'search_focus');
     }
   };
 
@@ -730,6 +1618,70 @@ export function App() {
       kHop: 2,
       toast: '과밀도 자동 수정이 적용되었습니다.',
     });
+  };
+
+  const openClusterTopHotspot = () => {
+    const candidate = pickClusterActionNode(boardModel, boardModelV2, selectedClusterId);
+    if (candidate === '') {
+      setToast('선택된 클러스터에서 이동할 노드를 찾지 못했습니다.');
+      return;
+    }
+    selectNode(candidate);
+    window.requestAnimationFrame(() => {
+      rendererRef.current?.focusNode(candidate, 0.42);
+    });
+  };
+
+  const openClusterDetail = () => {
+    const candidate = pickClusterActionNode(boardModel, boardModelV2, selectedClusterId);
+    if (candidate === '') {
+      setToast('선택된 클러스터에서 Detail로 이동할 노드를 찾지 못했습니다.');
+      return;
+    }
+    drillToDetail(candidate, 2, 'guided_flow');
+  };
+
+  const openLargestCluster = () => {
+    const topCluster = String(clusterCards[0]?.id ?? '').trim();
+    if (topCluster === '') {
+      setToast('클러스터를 찾지 못했습니다.');
+      return;
+    }
+    drillToCluster(topCluster, 'guided_flow');
+    setToast('가장 큰 클러스터로 이동했습니다.');
+  };
+
+  const openGuidedHotspot = () => {
+    const targetClusterId = pickBestClusterId(clusterCards, selectedClusterId);
+    if (targetClusterId === '') {
+      setToast('핫스팟을 찾을 클러스터가 없습니다.');
+      return;
+    }
+    if (selectedClusterId !== targetClusterId) {
+      drillToCluster(targetClusterId, 'guided_flow');
+    }
+    const candidate = pickClusterActionNode(boardModel, boardModelV2, targetClusterId);
+    if (candidate === '') {
+      setToast('선택한 클러스터에 핫스팟 노드가 없습니다.');
+      return;
+    }
+    selectNode(candidate);
+    window.requestAnimationFrame(() => {
+      rendererRef.current?.focusNode(candidate, 0.46);
+    });
+  };
+
+  const openGuidedDetail = () => {
+    const targetClusterId = pickBestClusterId(clusterCards, selectedClusterId);
+    if (targetClusterId !== '' && selectedClusterId !== targetClusterId) {
+      drillToCluster(targetClusterId, 'guided_flow');
+    }
+    const candidate = selectedNodeId.trim() !== '' ? selectedNodeId : pickClusterActionNode(boardModel, boardModelV2, targetClusterId);
+    if (candidate === '') {
+      setToast('Detail로 이동할 노드를 찾지 못했습니다.');
+      return;
+    }
+    drillToDetail(candidate, 2, 'guided_flow');
   };
 
   const onShowPaths = () => {
@@ -763,15 +1715,18 @@ export function App() {
     selectNode(nodeId);
     const focused = rendererRef.current?.focusNode(nodeId, 0.4) ?? false;
     if (!focused) {
-      drillToDetail(nodeId, 2);
+      drillToDetail(nodeId, 2, 'guided_flow');
     }
   };
 
   const modeGuide = useMemo(() => {
-    if (mode === 'cluster') return '클러스터 카드를 클릭해 Structural로 들어가세요.';
-    if (mode === 'structural') return '카드를 클릭해 요약을 보고, 더블클릭으로 Detail(2-hop)로 이동하세요.';
-    return '선택 노드 기준으로 1-hop / 2-hop / paths를 분석하세요.';
-  }, [mode]);
+    if (mode === 'cluster') return '1) 기능군(레인) 선택 → 2) +more(펼치기) 또는 더블클릭으로 Structural 진입.';
+    if (mode === 'structural') return '1) 파일 카드 선택 → 2) 오른쪽 요약/링크 근거 확인 → 3) 필요 시 더블클릭 Detail.';
+    if (selectedNodeId.trim() !== '') {
+      return `Detail 카드는 선택 노드 기준 관계(anchor/1-hop/2-hop)로 표시됩니다. 현재: ${selectedNode.label || selectedNodeId} · ${detailScopeSummary || 'related scope'}`;
+    }
+    return 'Detail에서도 카드 기반으로 표시됩니다. 카드 선택 후 1-hop/2-hop/3-hop 또는 Show paths로 연결 원인을 추적하세요.';
+  }, [mode, selectedNodeId, selectedNode.label, detailScopeSummary]);
 
   const breadcrumb = useMemo(() => {
     const parts = ['All'];
@@ -803,7 +1758,7 @@ export function App() {
   }, []);
 
   const activeDiagnostic = useMemo(() => {
-    if (rendererError !== '' && rendererErrorCode !== 'none') {
+    if (rendererBackend !== 'board_canvas' && rendererError !== '' && rendererErrorCode !== 'none') {
       const warningLevel = rendererBackend === 'canvas2d_fallback' ? 'warning' : 'error';
       return {
         level: warningLevel,
@@ -858,7 +1813,19 @@ export function App() {
           }}
           placeholder="Search nodes, paths, types..."
         />
-        <select className="mode" value={mode} onChange={(event) => setMode(event.target.value as VisualizerMode)}>
+        <select
+          className="mode"
+          value={mode}
+          onChange={(event) => {
+            const next = event.target.value as VisualizerMode;
+            if (next === 'detail' && uiDefaults.detailRequiresAnchor && selectedNodeId.trim() === '') {
+              setToast('Detail 모드는 먼저 노드를 선택한 뒤 사용하세요. Structural에서 카드/Hub를 먼저 선택하세요.');
+              setMode('structural', 'manual_mode');
+              return;
+            }
+            setMode(next, 'manual_mode');
+          }}
+        >
           <option value="cluster">Cluster</option>
           <option value="structural">Structural</option>
           <option value="detail">Detail</option>
@@ -881,6 +1848,18 @@ export function App() {
         <span className="badge">Backend {rendererBackend.replace('_', ' ')}</span>
         {edgesSampled ? <span className="badge">Edges sampled</span> : null}
       </div>
+
+      {activeLegend.length > 0 ? (
+        <div className="legend-strip">
+          {activeLegend.map((item) => (
+            <span key={item.edgeType} className={`legend-item ${edgeTypeEnabled[item.edgeType] ? 'is-enabled' : ''}`}>
+              <i style={{ color: item.color }}>{item.style === 'dashed' ? '╌' : item.style === 'dotted' ? '⋯' : '—'}</i>
+              {item.label}
+              {edgeTypeEnabled[item.edgeType] ? ' ON' : ' OFF'}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       {activeDiagnostic != null ? (
         <div className={`diag-banner ${activeDiagnostic.level === 'error' ? 'critical' : ''}`}>
@@ -905,8 +1884,8 @@ export function App() {
               <button
                 key={cluster.id}
                 className={`cluster-card ${selectedClusterId === cluster.id ? 'active' : ''}`}
-                onClick={() => drillToCluster(cluster.id)}
-                onDoubleClick={() => drillToCluster(cluster.id)}
+                onClick={() => drillToCluster(cluster.id, 'cluster_click')}
+                onDoubleClick={() => drillToCluster(cluster.id, 'cluster_click')}
               >
                 <div className="cluster-title">{cluster.label}</div>
                 <div className="cluster-meta">
@@ -914,6 +1893,19 @@ export function App() {
                 </div>
               </button>
             ))}
+          </div>
+
+          <div className="workflow-panel">
+            <div className="filter-title">Guided Flow</div>
+            <button className="workflow-step" onClick={openLargestCluster}>
+              1) Largest cluster
+            </button>
+            <button className="workflow-step" onClick={openGuidedHotspot}>
+              2) Top hotspot
+            </button>
+            <button className="workflow-step" onClick={openGuidedDetail}>
+              3) Open Detail 2-hop
+            </button>
           </div>
 
           <div className="quick-filters">
@@ -954,6 +1946,12 @@ export function App() {
 
         <main className="canvas-panel">
           <div ref={graphHostRef} className="graph-canvas" />
+          {mode === 'detail' && selectedNodeId.trim() === '' ? (
+            <div className="graph-empty-hint">
+              <div className="graph-empty-title">Detail 준비 단계</div>
+              <div>왼쪽에서 기능군을 선택하고 카드 또는 Hub Top5를 클릭한 뒤 Detail(2-hop)로 들어가세요.</div>
+            </div>
+          ) : null}
           {rendererBackend === 'canvas2d_fallback' && rendererError !== '' ? (
             <div className="graph-error">
               <div className="graph-error-title">WebGL 경로 실패</div>
@@ -961,11 +1959,49 @@ export function App() {
               <code className="graph-error-code">{rendererError}</code>
             </div>
           ) : null}
-          {mode === 'detail' ? <canvas ref={minimapRef} className="minimap" width={160} height={110} /> : null}
+          {mode === 'detail' && boardFrame == null ? (
+            <canvas ref={minimapRef} className="minimap" width={160} height={110} />
+          ) : null}
         </main>
 
         <aside className="right-panel">
           <h3>Detail Inspector</h3>
+          {selectedLinkSummary != null ? (
+            <div className="summary-card">
+              <div className="summary-title">Link Evidence</div>
+              <div>{selectedLinkSummary.sourceTitle} → {selectedLinkSummary.targetTitle}</div>
+              <div>Count: {selectedLinkSummary.count}</div>
+              <div>Dominant: {selectedLinkSummary.dominantType}</div>
+              <div className="muted">
+                왜 연결됨: {selectedLinkSummary.sourceTitle}에서 {selectedLinkSummary.targetTitle}로
+                {' '}
+                {selectedLinkSummary.dominantType}
+                {' '}
+                관계가 가장 많이 관측되었습니다.
+              </div>
+              <div className="summary-list">
+                <div className="muted">Type breakdown</div>
+                {Object.entries(selectedLinkSummary.typeBreakdown)
+                  .sort((a, b) => Number(b[1]) - Number(a[1]))
+                  .map(([key, value]) => (
+                    <div key={key}>{key}: {Number(value)}</div>
+                  ))}
+              </div>
+              <div className="summary-list">
+                <div className="muted">Evidence (top {Math.min(3, selectedLinkSummary.evidenceRefs.length)})</div>
+                {selectedLinkSummary.evidenceRefs.slice(0, 3).map((ref, index) => {
+                  const row = ref as Record<string, unknown>;
+                  return (
+                    <div key={`${selectedLinkSummary.id}-evidence-${index}`} className="link-evidence-row">
+                      <div>{String(row.edge_type ?? 'unknown')} · {String(row.source_label ?? row.source_node ?? '-')} → {String(row.target_label ?? row.target_node ?? '-')}</div>
+                      <small>{String(row.source_path ?? '')}{Number(row.source_line ?? -1) > 0 ? `:${Number(row.source_line)}` : ''}</small>
+                    </div>
+                  );
+                })}
+                {selectedLinkSummary.evidenceRefs.length === 0 ? <div className="muted">근거 데이터 없음</div> : null}
+              </div>
+            </div>
+          ) : null}
           {selectedNode.id === '' && selectedClusterSummary == null ? (
             <div className="summary-card">
               <div className="summary-title">Start here</div>
@@ -977,9 +2013,41 @@ export function App() {
           {selectedClusterSummary != null && selectedNode.id === '' ? (
             <div className="summary-card">
               <div className="summary-title">{selectedClusterSummary.title}</div>
+              {lastNavigationReason === 'more_click' && structuralExpandedLaneId.trim() !== '' ? (
+                <div className="muted">`+more`로 확장된 레인입니다. 카드를 클릭해 요약을 확인하세요.</div>
+              ) : null}
               <div>Nodes: {selectedClusterSummary.nodeCount}</div>
+              <div>Files: {selectedClusterSummary.fileCount} · Classes: {selectedClusterSummary.classCount}</div>
+              <div>Functions: {selectedClusterSummary.functionCount}</div>
               <div>External: {selectedClusterSummary.externalCount}</div>
               <div>Hot: {selectedClusterSummary.hot.toFixed(2)}</div>
+              {!uiDefaults.structuralShowAllOnMore ? (
+                <div className="muted">현재 설정은 전체 카드 확장을 제한합니다.</div>
+              ) : null}
+              <div className="inspector-actions">
+                <button onClick={openClusterTopHotspot}>Top hotspot</button>
+                <button onClick={openClusterDetail}>Detail 2-hop</button>
+                <button onClick={() => selectedClusterId && rendererRef.current?.focusNode(selectedClusterId, 0.6)}>
+                  Focus cluster
+                </button>
+              </div>
+              {selectedClusterTopCards.length > 0 ? (
+                <div className="summary-list">
+                  <div className="muted">Top files/classes</div>
+                  {selectedClusterTopCards.map((card) => (
+                    <button
+                      key={card.id}
+                      className="summary-link"
+                      onClick={() => {
+                        selectNode(card.id);
+                        rendererRef.current?.focusNode(card.id, 0.46);
+                      }}
+                    >
+                      {card.title}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
           {selectedNode.id !== '' ? (
@@ -990,11 +2058,16 @@ export function App() {
                 <div>Path: {selectedNode.path || '-'}</div>
                 <div>Degree: in {selectedNode.inDegree} / out {selectedNode.outDegree}</div>
                 <div>LOC: {selectedNode.loc}</div>
+                {mode === 'detail' ? (
+                  <div className="muted">
+                    왜 보임: {selectedNodeScopeReason || 'anchor'} · {detailScopeSummary || 'related scope'}
+                  </div>
+                ) : null}
               </div>
               <div className="inspector-actions">
-                <button onClick={() => selectedNodeId && drillToDetail(selectedNodeId, 1)}>1-hop</button>
-                <button onClick={() => selectedNodeId && drillToDetail(selectedNodeId, 2)}>2-hop</button>
-                <button onClick={() => selectedNodeId && drillToDetail(selectedNodeId, 3)}>3-hop</button>
+                <button onClick={() => selectedNodeId && drillToDetail(selectedNodeId, 1, 'manual_mode')}>1-hop</button>
+                <button onClick={() => selectedNodeId && drillToDetail(selectedNodeId, 2, 'manual_mode')}>2-hop</button>
+                <button onClick={() => selectedNodeId && drillToDetail(selectedNodeId, 3, 'manual_mode')}>3-hop</button>
                 <button onClick={onShowPaths}>Show paths</button>
               </div>
               <button className="raw-toggle" onClick={toggleRawJson}>
@@ -1023,7 +2096,7 @@ export function App() {
                 <div className="result-actions">
                   <button onClick={() => onSearchFocus(item)}>Focus</button>
                   <button onClick={() => selectNode(item.nodeId)}>Pin</button>
-                  <button onClick={() => drillToDetail(item.nodeId, 2)}>2-hop</button>
+                  <button onClick={() => drillToDetail(item.nodeId, 2, 'search_focus')}>2-hop</button>
                 </div>
               </div>
             ))}

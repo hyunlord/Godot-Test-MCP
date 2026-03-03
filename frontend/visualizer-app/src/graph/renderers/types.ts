@@ -32,32 +32,67 @@ export interface RenderFrame {
       y: number;
       w: number;
       h: number;
-      summary: { nodeCount: number; externalCount: number; hot: number };
+      summary: {
+        nodeCount: number;
+        externalCount: number;
+        hot: number;
+        fileCount?: number;
+        functionCount?: number;
+        classCount?: number;
+      };
       cards: Array<{
         id: string;
         title: string;
         kind: string;
+        path?: string;
         x: number;
         y: number;
         w: number;
         h: number;
-        stats: { inDegree: number; outDegree: number; loc: number };
+        stats: {
+          inDegree: number;
+          outDegree: number;
+          loc: number;
+          functions?: number;
+          classes?: number;
+          signals?: number;
+          relation?: string;
+          hop?: number;
+        };
       }>;
       hiddenCards: number;
     }>;
     links: Array<{
+      id: string;
       sourceClusterId: string;
       targetClusterId: string;
+      sourceCardId?: string;
+      targetCardId?: string;
       count: number;
+      typeBreakdown?: Record<string, number>;
+      evidenceRefs?: Array<Record<string, unknown>>;
+      color?: string;
+      style?: string;
+      defaultVisible?: boolean;
+    }>;
+    legend?: Array<{
+      edgeType: string;
+      label: string;
+      color: string;
+      style: string;
+      defaultVisible: boolean;
     }>;
   };
   selectedNodeId?: string;
   selectedClusterId?: string;
+  selectedLinkId?: string;
 }
 
 export interface GraphRendererCallbacks {
   onNodeClick: (nodeId: string) => void;
   onNodeDoubleClick: (nodeId: string) => void;
+  onMoreClick?: (clusterId: string) => void;
+  onEdgeClick?: (edgeId: string) => void;
   onStageClick: () => void;
 }
 

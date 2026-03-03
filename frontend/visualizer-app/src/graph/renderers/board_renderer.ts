@@ -72,6 +72,7 @@ export class BoardRenderer implements GraphRenderer {
 
   private draw(): void {
     if (this.root == null) return;
+    this.root.className = `board-root mode-${this.frame.mode}`;
     this.root.innerHTML = '';
     this.nodeElements.clear();
     this.clusterElements.clear();
@@ -93,33 +94,102 @@ export class BoardRenderer implements GraphRenderer {
       (width - CANVAS_PADDING * 2) / Math.max(1, bounds.width),
       (height - CANVAS_PADDING * 2) / Math.max(1, bounds.height),
     );
-    const scale = Math.max(0.32, Math.min(1.0, fitScale));
-    const offsetX = CANVAS_PADDING + ((width - CANVAS_PADDING * 2) - bounds.width * scale) / 2;
-    const offsetY = CANVAS_PADDING + ((height - CANVAS_PADDING * 2) - bounds.height * scale) / 2;
+    const scale = this.frame.mode === 'cluster'
+      ? Math.max(0.9, Math.min(1.0, fitScale))
+      : 1.0;
+    const contentWidth = Math.max(width, Math.round(bounds.width * scale + CANVAS_PADDING * 2));
+    const contentHeight = Math.max(height, Math.round(bounds.height * scale + CANVAS_PADDING * 2));
+    this.root.style.width = `${contentWidth}px`;
+    this.root.style.height = `${contentHeight}px`;
+    const offsetX = this.frame.mode === 'cluster'
+      ? CANVAS_PADDING + ((contentWidth - CANVAS_PADDING * 2) - bounds.width * scale) / 2
+      : CANVAS_PADDING;
+    const offsetY = this.frame.mode === 'cluster'
+      ? CANVAS_PADDING + ((contentHeight - CANVAS_PADDING * 2) - bounds.height * scale) / 2
+      : CANVAS_PADDING;
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'board-links');
-    svg.setAttribute('width', String(width));
-    svg.setAttribute('height', String(height));
+    svg.setAttribute('width', String(contentWidth));
+    svg.setAttribute('height', String(contentHeight));
     this.root.appendChild(svg);
 
     const clusterLookup = new Map(board.clusters.map((cluster) => [cluster.id, cluster]));
+    const cardCenterLookup = new Map<string, { x: number; y: number }>();
+    for (const cluster of board.clusters) {
+      const clusterOffsetX = offsetX + (cluster.x - bounds.minX) * scale;
+      const clusterOffsetY = offsetY + (cluster.y - bounds.minY) * scale;
+      for (const card of cluster.cards) {
+        const cardX = Math.max(8, (card.x - cluster.x) * scale);
+        const cardY = Math.max(36, (card.y - cluster.y) * scale);
+        const minCardW = this.frame.mode === 'cluster' ? 188 : this.frame.mode === 'detail' ? 232 : 208;
+        const minCardH = this.frame.mode === 'cluster' ? 76 : this.frame.mode === 'detail' ? 90 : 82;
+        const cardW = Math.max(minCardW, card.w * scale);
+        const cardH = Math.max(minCardH, card.h * scale);
+        cardCenterLookup.set(card.id, {
+          x: clusterOffsetX + cardX + cardW / 2,
+          y: clusterOffsetY + cardY + cardH / 2,
+        });
+      }
+    }
 
     for (const link of board.links) {
-      const source = clusterLookup.get(link.sourceClusterId);
-      const target = clusterLookup.get(link.targetClusterId);
-      if (source == null || target == null) continue;
-
-      const sx = offsetX + (source.x - bounds.minX + source.w / 2) * scale;
-      const sy = offsetY + (source.y - bounds.minY + source.h / 2) * scale;
-      const tx = offsetX + (target.x - bounds.minX + target.w / 2) * scale;
-      const ty = offsetY + (target.y - bounds.minY + target.h / 2) * scale;
-      const curve = Math.max(28, Math.abs(tx - sx) * 0.32);
+      let sx = 0;
+      let sy = 0;
+      let tx = 0;
+      let ty = 0;
+      let cardLink = false;
+      if (typeof link.sourceCardId === 'string' && typeof link.targetCardId === 'string') {
+        const sourceCard = cardCenterLookup.get(link.sourceCardId);
+        const targetCard = cardCenterLookup.get(link.targetCardId);
+        if (sourceCard != null && targetCard != null) {
+          sx = sourceCard.x;
+          sy = sourceCard.y;
+          tx = targetCard.x;
+          ty = targetCard.y;
+          cardLink = true;
+        }
+      }
+      if (!cardLink) {
+        const source = clusterLookup.get(link.sourceClusterId);
+        const target = clusterLookup.get(link.targetClusterId);
+        if (source == null || target == null) continue;
+        sx = offsetX + (source.x - bounds.minX + source.w / 2) * scale;
+        sy = offsetY + (source.y - bounds.minY + source.h / 2) * scale;
+        tx = offsetX + (target.x - bounds.minX + target.w / 2) * scale;
+        ty = offsetY + (target.y - bounds.minY + target.h / 2) * scale;
+      }
+      const curve = cardLink
+        ? Math.max(14, Math.abs(tx - sx) * 0.22)
+        : Math.max(28, Math.abs(tx - sx) * 0.32);
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('class', 'board-link');
+      if (cardLink) path.classList.add('is-card');
+      if (this.frame.selectedLinkId === link.id) {
+        path.classList.add('is-selected');
+      }
       path.setAttribute('d', `M ${sx} ${sy} C ${sx + curve} ${sy}, ${tx - curve} ${ty}, ${tx} ${ty}`);
       path.setAttribute('stroke-width', String(Math.min(6, 1 + Math.log2(1 + Math.max(1, link.count)))));
+      if (typeof link.color === 'string' && link.color.trim() !== '') {
+        path.setAttribute('stroke', link.color);
+      }
+      if (link.style === 'dashed') {
+        path.setAttribute('stroke-dasharray', '8 6');
+      } else if (link.style === 'dotted') {
+        path.setAttribute('stroke-dasharray', '2 6');
+      }
       svg.appendChild(path);
+
+      if (typeof this.callbacks.onEdgeClick === 'function') {
+        const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        hit.setAttribute('class', 'board-link-hit');
+        hit.setAttribute('d', path.getAttribute('d') ?? '');
+        hit.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this.callbacks.onEdgeClick?.(link.id);
+        });
+        svg.appendChild(hit);
+      }
     }
 
     for (const cluster of board.clusters) {
@@ -148,7 +218,13 @@ export class BoardRenderer implements GraphRenderer {
       const title = document.createElement('h4');
       title.textContent = cluster.title;
       const summary = document.createElement('span');
-      summary.textContent = `${cluster.summary.nodeCount} nodes · ext ${cluster.summary.externalCount} · hot ${cluster.summary.hot.toFixed(1)}`;
+      const summaryParts = [
+        `${cluster.summary.nodeCount} nodes`,
+        `files ${Number(cluster.summary.fileCount ?? 0)}`,
+        `ext ${cluster.summary.externalCount}`,
+        `hot ${cluster.summary.hot.toFixed(1)}`,
+      ];
+      summary.textContent = summaryParts.join(' · ');
       header.appendChild(title);
       header.appendChild(summary);
       panel.appendChild(header);
@@ -166,13 +242,26 @@ export class BoardRenderer implements GraphRenderer {
 
         const cardX = Math.max(8, (card.x - cluster.x) * scale);
         const cardY = Math.max(36, (card.y - cluster.y) * scale);
-        const cardW = Math.max(140, card.w * scale);
-        const cardH = Math.max(46, card.h * scale);
+        const minCardW = this.frame.mode === 'cluster' ? 188 : this.frame.mode === 'detail' ? 232 : 208;
+        const minCardH = this.frame.mode === 'cluster' ? 76 : this.frame.mode === 'detail' ? 90 : 82;
+        const cardW = Math.max(minCardW, card.w * scale);
+        const cardH = Math.max(minCardH, card.h * scale);
         cardButton.style.left = `${cardX}px`;
         cardButton.style.top = `${cardY}px`;
         cardButton.style.width = `${cardW}px`;
         cardButton.style.height = `${cardH}px`;
-        cardButton.innerHTML = `<strong>${card.title}</strong><small>${card.kind} · ${card.stats.inDegree}i ${card.stats.outDegree}o · ${card.stats.loc}L</small>`;
+        const detailParts = [
+          card.kind,
+          `${card.stats.inDegree}i ${card.stats.outDegree}o`,
+          `${card.stats.loc}L`,
+        ];
+        if (typeof card.stats.relation === 'string' && card.stats.relation.trim() !== '') {
+          detailParts.unshift(card.stats.relation);
+        }
+        if (Number(card.stats.functions ?? 0) > 0) {
+          detailParts.push(`${Number(card.stats.functions)}f`);
+        }
+        cardButton.innerHTML = `<strong>${card.title}</strong><small>${detailParts.join(' · ')}</small>`;
         cardButton.addEventListener('click', (event) => {
           event.stopPropagation();
           this.callbacks.onNodeClick(card.id);
@@ -186,9 +275,19 @@ export class BoardRenderer implements GraphRenderer {
       }
 
       if (cluster.hiddenCards > 0) {
-        const more = document.createElement('div');
+        const more = document.createElement('button');
         more.className = 'board-more';
-        more.textContent = `+${cluster.hiddenCards} more`;
+        more.type = 'button';
+        more.textContent = `+${cluster.hiddenCards} more 펼치기`;
+        more.title = '클릭하면 Structural로 이동해 숨겨진 카드를 볼 수 있습니다.';
+        more.addEventListener('click', (event) => {
+          event.stopPropagation();
+          if (typeof this.callbacks.onMoreClick === 'function') {
+            this.callbacks.onMoreClick(cluster.id);
+            return;
+          }
+          this.callbacks.onNodeDoubleClick(cluster.id);
+        });
         panel.appendChild(more);
       }
 
