@@ -132,6 +132,7 @@ export interface BoardV2LinkEvidence {
   target_path: string;
   source_line: number;
   target_line: number;
+  reason?: string;
 }
 
 export interface BoardV2Link {
@@ -142,6 +143,14 @@ export interface BoardV2Link {
   type_breakdown: Record<string, number>;
   evidence_refs: BoardV2LinkEvidence[];
   points?: { sx: number; sy: number; c1x: number; c1y: number; c2x: number; c2y: number; tx: number; ty: number };
+}
+
+export interface RelationshipEvidenceRow {
+  source_id: string;
+  target_id: string;
+  edge_type: string;
+  count: number;
+  evidence_refs: BoardV2LinkEvidence[];
 }
 
 export interface BoardModelV2 {
@@ -190,6 +199,7 @@ export interface GraphBundle {
   };
   board_model?: BoardModel;
   board_model_v2?: BoardModelV2;
+  relationship_evidence?: RelationshipEvidenceRow[];
   classification?: {
     lane_strategy?: string;
     confidence?: number;
@@ -247,6 +257,7 @@ export interface ViewModel {
   };
   board_model?: BoardModel;
   board_model_v2?: BoardModelV2;
+  relationship_evidence?: RelationshipEvidenceRow[];
   classification?: {
     lane_strategy?: string;
     confidence?: number;

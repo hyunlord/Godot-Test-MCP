@@ -73,6 +73,7 @@ class FakeVisualizerClient:
                         "layouts": {},
                         "board_model": {"clusters": [], "links": [], "hotspots": []},
                         "board_model_v2": {"lanes": [], "links": [], "legend": []},
+                        "relationship_evidence": [],
                         "classification": {"lane_strategy": "hybrid", "confidence": 0.0, "source_signals": {}},
                     }
                 ),
@@ -108,6 +109,7 @@ class FakeVisualizerClient:
                         },
                         "board_model": {"clusters": [], "links": [], "hotspots": []},
                         "board_model_v2": {"lanes": [], "links": [], "legend": []},
+                        "relationship_evidence": [],
                         "classification": {"lane_strategy": "hybrid", "confidence": 0.0, "source_signals": {}},
                         "cluster_layout_health": {
                             "overlap_count": 0,

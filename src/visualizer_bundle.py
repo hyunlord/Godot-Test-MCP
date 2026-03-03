@@ -227,6 +227,7 @@ class VisualizerBundleBuilder:
             "cluster_layout_health": view_model.get("cluster_layout_health", {}),
             "board_model": view_model.get("board_model", {}),
             "board_model_v2": view_model.get("board_model_v2", {}),
+            "relationship_evidence": view_model.get("relationship_evidence", []),
             "classification": view_model.get("classification", {}),
         }
 

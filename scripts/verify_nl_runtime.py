@@ -1157,6 +1157,7 @@ async def execute_scenario_pack(
                     and "cluster_layout_health" in view_model_json
                     and "board_model" in view_model_json
                     and "board_model_v2" in view_model_json
+                    and "relationship_evidence" in view_model_json
                     and "classification" in view_model_json
                     and str(bundle_json.get("schema_version", "")).strip() != ""
                     and "nodes" in bundle_json
@@ -1168,6 +1169,7 @@ async def execute_scenario_pack(
                     and "layouts" in bundle_json
                     and "board_model" in bundle_json
                     and "board_model_v2" in bundle_json
+                    and "relationship_evidence" in bundle_json
                     and "classification" in bundle_json
                     and (assets_ok or assets_dir == "")
                 )

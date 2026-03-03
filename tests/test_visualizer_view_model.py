@@ -109,6 +109,8 @@ def test_view_model_builder_generates_stats_and_adjacency() -> None:
     assert "lanes" in vm["board_model_v2"]
     assert "links" in vm["board_model_v2"]
     assert "legend" in vm["board_model_v2"]
+    assert "relationship_evidence" in vm
+    assert isinstance(vm["relationship_evidence"], list)
     assert vm["classification"]["lane_strategy"] == "hybrid"
     assert vm["ui_defaults"]["detail_requires_anchor"] is True
     assert vm["ui_defaults"]["structural_autoselect"] == "top_file_card"
@@ -176,6 +178,15 @@ def test_view_model_builder_v2_replaces_anonymous_with_filename_and_emits_link_e
     assert "type_breakdown" in first_link
     assert "evidence_refs" in first_link
     assert isinstance(first_link["evidence_refs"], list)
+    assert isinstance(first_link["evidence_refs"][0].get("reason", ""), str)
+    assert "relationship_evidence" in vm
+    assert len(vm["relationship_evidence"]) >= 1
+    first_rel = vm["relationship_evidence"][0]
+    assert "source_id" in first_rel
+    assert "target_id" in first_rel
+    assert "edge_type" in first_rel
+    assert "count" in first_rel
+    assert isinstance(first_rel.get("evidence_refs", []), list)
 
 
 def test_view_model_builder_v2_applies_domain_override_rules(tmp_path: Path) -> None:

@@ -155,7 +155,7 @@ class VisualizerViewModelBuilder:
             nodes_by_id=nodes_by_id,
             cluster_metrics=cluster_metrics,
         )
-        board_model_v2, classification = self._build_board_model_v2(
+        board_model_v2, classification, relationship_evidence = self._build_board_model_v2(
             edge_layouts=edge_layouts,
             nodes_by_id=nodes_by_id,
             project_path=str(map_payload.get("project_path", "")),
@@ -183,6 +183,7 @@ class VisualizerViewModelBuilder:
             "cluster_layout_health": cluster_layout_health,
             "board_model": board_model,
             "board_model_v2": board_model_v2,
+            "relationship_evidence": relationship_evidence,
             "classification": classification,
             "ui_defaults": {
                 "default_layer": normalized_default_layer,
@@ -817,7 +818,7 @@ class VisualizerViewModelBuilder:
         edge_layouts: list[dict[str, Any]],
         nodes_by_id: dict[str, dict[str, Any]],
         project_path: str,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
         overrides = self._load_domain_overrides(project_path)
         alias_map = overrides.get("aliases", {}) if isinstance(overrides.get("aliases", {}), dict) else {}
         rules = overrides.get("rules", []) if isinstance(overrides.get("rules", []), list) else []
@@ -901,6 +902,7 @@ class VisualizerViewModelBuilder:
                         "target_path": str(dst_node.get("path", "")),
                         "source_line": int(src_meta.get("line", -1) or -1),
                         "target_line": int(dst_meta.get("line", -1) or -1),
+                        "reason": f"{edge_type} relation observed between grouped files",
                     }
                 )
 
@@ -1068,6 +1070,24 @@ class VisualizerViewModelBuilder:
                 }
             )
 
+        relationship_evidence: list[dict[str, Any]] = []
+        for (source_lane, target_lane), type_counter in lane_link_types.items():
+            evidence = lane_link_evidence.get((source_lane, target_lane), [])[:12]
+            for edge_type, edge_count in sorted(type_counter.items(), key=lambda item: item[1], reverse=True):
+                typed_refs = [row for row in evidence if str(row.get("edge_type", "")) == str(edge_type)]
+                if len(typed_refs) == 0:
+                    typed_refs = evidence
+                relationship_evidence.append(
+                    {
+                        "source_id": source_lane,
+                        "target_id": target_lane,
+                        "edge_type": str(edge_type),
+                        "count": int(edge_count),
+                        "evidence_refs": typed_refs[:8],
+                    }
+                )
+        relationship_evidence.sort(key=lambda item: int(item.get("count", 0)), reverse=True)
+
         normalized_lane_signals = {
             lane_key: sorted({signal for signal in signals if signal.strip() != ""})
             for lane_key, signals in lane_signals.items()
@@ -1087,6 +1107,7 @@ class VisualizerViewModelBuilder:
                 "confidence": round(global_confidence, 3),
                 "source_signals": normalized_lane_signals,
             },
+            relationship_evidence,
         )
 
     def _pick_group_representative(self, items: list[dict[str, Any]]) -> dict[str, Any]:

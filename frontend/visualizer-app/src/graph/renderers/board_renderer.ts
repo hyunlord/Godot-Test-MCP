@@ -122,8 +122,8 @@ export class BoardRenderer implements GraphRenderer {
       for (const card of cluster.cards) {
         const cardX = Math.max(8, (card.x - cluster.x) * scale);
         const cardY = Math.max(36, (card.y - cluster.y) * scale);
-        const minCardW = this.frame.mode === 'cluster' ? 188 : this.frame.mode === 'detail' ? 232 : 208;
-        const minCardH = this.frame.mode === 'cluster' ? 76 : this.frame.mode === 'detail' ? 90 : 82;
+        const minCardW = this.frame.mode === 'cluster' ? 196 : this.frame.mode === 'detail' ? 244 : 220;
+        const minCardH = this.frame.mode === 'cluster' ? 86 : this.frame.mode === 'detail' ? 104 : 96;
         const cardW = Math.max(minCardW, card.w * scale);
         const cardH = Math.max(minCardH, card.h * scale);
         cardCenterLookup.set(card.id, {
@@ -242,8 +242,8 @@ export class BoardRenderer implements GraphRenderer {
 
         const cardX = Math.max(8, (card.x - cluster.x) * scale);
         const cardY = Math.max(36, (card.y - cluster.y) * scale);
-        const minCardW = this.frame.mode === 'cluster' ? 188 : this.frame.mode === 'detail' ? 232 : 208;
-        const minCardH = this.frame.mode === 'cluster' ? 76 : this.frame.mode === 'detail' ? 90 : 82;
+        const minCardW = this.frame.mode === 'cluster' ? 196 : this.frame.mode === 'detail' ? 244 : 220;
+        const minCardH = this.frame.mode === 'cluster' ? 86 : this.frame.mode === 'detail' ? 104 : 96;
         const cardW = Math.max(minCardW, card.w * scale);
         const cardH = Math.max(minCardH, card.h * scale);
         cardButton.style.left = `${cardX}px`;

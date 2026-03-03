@@ -303,6 +303,64 @@ function boardFrameFromDetailVisible(args: {
   const nodeById = new Map<string, ViewModelNode>();
   for (const node of nodes) nodeById.set(String(node.id), node);
   const nodeIdSet = new Set(nodes.map((node) => String(node.id)));
+
+  const basename = (path: string): string => {
+    const trimmed = path.trim();
+    if (trimmed === '') return '';
+    const parts = trimmed.split('/');
+    return String(parts[parts.length - 1] ?? trimmed);
+  };
+
+  const groupKeyForNode = (node: ViewModelNode): string => {
+    const lookup = nodeLookup.get(String(node.id));
+    const path = String(node.path ?? lookup?.path ?? '').trim();
+    if (path !== '') return `path::${path}`;
+    return `id::${String(node.id)}`;
+  };
+
+  type DetailGroup = {
+    key: string;
+    path: string;
+    nodes: ViewModelNode[];
+    representative: ViewModelNode;
+    cardId: string;
+    kind: string;
+    title: string;
+    inDegree: number;
+    outDegree: number;
+    loc: number;
+    functions: number;
+    classes: number;
+    signals: number;
+    relation: string;
+    hop: number;
+  };
+
+  const representativeRank = (node: ViewModelNode): [number, number, number] => {
+    const kind = String(node.kind ?? '').toLowerCase();
+    const kindRank =
+      kind === 'file' ? 0 :
+        kind === 'class' ? 1 :
+          kind === 'scene' ? 2 :
+            kind === 'resource' ? 3 :
+              kind === 'signal' ? 4 :
+                kind === 'function' ? 8 : 5;
+    const degree = Number(node.metrics?.in_degree ?? 0) + Number(node.metrics?.out_degree ?? 0);
+    const loc = Number(node.metrics?.loc ?? 0);
+    return [kindRank, -degree, -loc];
+  };
+
+  const groupsMap = new Map<string, { key: string; path: string; nodes: ViewModelNode[] }>();
+  for (const node of nodes) {
+    const key = groupKeyForNode(node);
+    const lookup = nodeLookup.get(String(node.id));
+    const path = String(node.path ?? lookup?.path ?? '').trim();
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, { key, path, nodes: [] });
+    }
+    groupsMap.get(key)?.nodes.push(node);
+  }
+
   const adjacency = new Map<string, Set<string>>();
   const directIn = new Set<string>();
   const directOut = new Set<string>();
@@ -349,16 +407,113 @@ function boardFrameFromDetailVisible(args: {
     return { label: 'related', hop };
   };
 
-  const sortedNodes = [...nodes].sort((a, b) => {
-    const aSelected = String(a.id) === selectedNodeId ? 1 : 0;
-    const bSelected = String(b.id) === selectedNodeId ? 1 : 0;
+  const groups: DetailGroup[] = [];
+  for (const entry of groupsMap.values()) {
+    if (entry.nodes.length === 0) continue;
+    const sortedByRank = [...entry.nodes].sort((a, b) => {
+      const [a0, a1, a2] = representativeRank(a);
+      const [b0, b1, b2] = representativeRank(b);
+      if (a0 !== b0) return a0 - b0;
+      if (a1 !== b1) return a1 - b1;
+      if (a2 !== b2) return a2 - b2;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    const representative = sortedByRank[0];
+    const hasAnchor = selectedNodeId !== '' && entry.nodes.some((node) => String(node.id) === selectedNodeId);
+
+    let inDegree = 0;
+    let outDegree = 0;
+    let loc = 0;
+    let functions = 0;
+    let classes = 0;
+    let signals = 0;
+    let fallbackIn = 0;
+    let fallbackOut = 0;
+    const groupNodeIds = new Set(entry.nodes.map((node) => String(node.id)));
+    let minHop = Number.POSITIVE_INFINITY;
+    let hasDirectIn = false;
+    let hasDirectOut = false;
+
+    for (const node of entry.nodes) {
+      const kind = String(node.kind ?? '').toLowerCase();
+      const nId = String(node.id);
+      const nIn = Number(node.metrics?.in_degree ?? 0);
+      const nOut = Number(node.metrics?.out_degree ?? 0);
+      fallbackIn += nIn;
+      fallbackOut += nOut;
+      loc = Math.max(loc, Number(node.metrics?.loc ?? 0));
+      if (kind === 'function') functions += 1;
+      if (kind === 'class') classes += 1;
+      if (kind === 'signal') signals += 1;
+      if (kind !== 'function') {
+        inDegree += nIn;
+        outDegree += nOut;
+      }
+      const hop = Number(hopById.get(nId) ?? -1);
+      if (hop >= 0) minHop = Math.min(minHop, hop);
+      if (directIn.has(nId)) hasDirectIn = true;
+      if (directOut.has(nId)) hasDirectOut = true;
+    }
+
+    if (inDegree === 0 && outDegree === 0) {
+      inDegree = fallbackIn;
+      outDegree = fallbackOut;
+    }
+
+    let relation = 'related';
+    let hop = Number.isFinite(minHop) ? minHop : -1;
+    if (selectedNodeId === '') {
+      relation = 'scope';
+      hop = -1;
+    } else if (hasAnchor) {
+      relation = 'anchor';
+      hop = 0;
+    } else if (hop === 1) {
+      if (hasDirectIn && hasDirectOut) relation = '1-hop in/out';
+      else if (hasDirectIn) relation = '1-hop in';
+      else if (hasDirectOut) relation = '1-hop out';
+      else relation = '1-hop';
+    } else if (hop >= 2) {
+      relation = `${hop}-hop`;
+    }
+
+    const representativeLookup = nodeLookup.get(String(representative.id));
+    const repTitle = displayCardTitle(representative, representativeLookup);
+    const pathTitle = basename(entry.path);
+    const title = pathTitle !== '' ? pathTitle : repTitle;
+    const cardId = hasAnchor ? selectedNodeId : String(representative.id);
+    const kind = entry.path !== '' ? 'file' : String(representative.kind ?? 'unknown');
+    groups.push({
+      key: entry.key,
+      path: entry.path,
+      nodes: entry.nodes,
+      representative,
+      cardId,
+      kind,
+      title,
+      inDegree,
+      outDegree,
+      loc,
+      functions,
+      classes,
+      signals,
+      relation,
+      hop,
+    });
+  }
+
+  const sortedGroups = [...groups].sort((a, b) => {
+    const aSelected = a.cardId === selectedNodeId ? 1 : 0;
+    const bSelected = b.cardId === selectedNodeId ? 1 : 0;
     if (bSelected !== aSelected) return bSelected - aSelected;
-    const aDegree = Number(a.metrics?.in_degree ?? 0) + Number(a.metrics?.out_degree ?? 0);
-    const bDegree = Number(b.metrics?.in_degree ?? 0) + Number(b.metrics?.out_degree ?? 0);
+    const aHop = a.hop < 0 ? 999 : a.hop;
+    const bHop = b.hop < 0 ? 999 : b.hop;
+    if (aHop !== bHop) return aHop - bHop;
+    const aDegree = a.inDegree + a.outDegree;
+    const bDegree = b.inDegree + b.outDegree;
     if (bDegree !== aDegree) return bDegree - aDegree;
-    return displayCardTitle(a, nodeLookup.get(String(a.id))).localeCompare(
-      displayCardTitle(b, nodeLookup.get(String(b.id))),
-    );
+    if (b.functions !== a.functions) return b.functions - a.functions;
+    return a.title.localeCompare(b.title);
   });
 
   const laneId = selectedClusterId !== '' ? selectedClusterId : `detail::${selectedNodeId || 'scope'}`;
@@ -368,74 +523,126 @@ function boardFrameFromDetailVisible(args: {
   const panelX = 40;
   const panelY = 40;
   const panelW = 1320;
-  const cardW = 260;
-  const cardH = 92;
+  const cardW = 280;
+  const cardH = 106;
   const gapX = 16;
   const gapY = 14;
   const padX = 16;
   const padY = 50;
   const columns = Math.max(1, Math.floor((panelW - padX * 2 + gapX) / (cardW + gapX)));
 
-  const cards = sortedNodes.map((node, index) => {
+  const cards = sortedGroups.map((group, index) => {
     const col = index % columns;
     const row = Math.floor(index / columns);
-    const relation = relationForNode(String(node.id));
     return {
-      id: String(node.id),
-      title: displayCardTitle(node, nodeLookup.get(String(node.id))),
-      kind: String(node.kind),
-      path: String(node.path ?? nodeLookup.get(String(node.id))?.path ?? ''),
+      id: group.cardId,
+      title: group.title,
+      kind: group.kind,
+      path: group.path,
       x: panelX + padX + col * (cardW + gapX),
       y: panelY + padY + row * (cardH + gapY),
       w: cardW,
       h: cardH,
       stats: {
-        inDegree: Number(node.metrics?.in_degree ?? 0),
-        outDegree: Number(node.metrics?.out_degree ?? 0),
-        loc: Number(node.metrics?.loc ?? 0),
-        functions: Number((node.metadata as Record<string, unknown> | undefined)?.function_count ?? 0),
-        classes: Number((node.metadata as Record<string, unknown> | undefined)?.class_count ?? 0),
-        signals: Number((node.metadata as Record<string, unknown> | undefined)?.signal_count ?? 0),
-        relation: relation.label,
-        hop: relation.hop,
+        inDegree: group.inDegree,
+        outDegree: group.outDegree,
+        loc: group.loc,
+        functions: group.functions,
+        classes: group.classes,
+        signals: group.signals,
+        relation: group.relation,
+        hop: group.hop,
       },
     };
   });
 
-  const nodeSet = new Set(cards.map((card) => card.id));
-  const links = visibleEdges
-    .filter((edge) => nodeSet.has(String(edge.source)) && nodeSet.has(String(edge.target)))
-    .slice(0, 420)
-    .map((edge) => {
-      const sourceNode = nodeById.get(String(edge.source));
-      const targetNode = nodeById.get(String(edge.target));
-      const sourceLookup = nodeLookup.get(String(edge.source));
-      const targetLookup = nodeLookup.get(String(edge.target));
-      const edgeType = String(edge.edge_type ?? 'contains');
-      const count = Number((edge.metadata as Record<string, unknown> | undefined)?.count ?? 1);
+  const groupByNodeId = new Map<string, DetailGroup>();
+  for (const group of sortedGroups) {
+    for (const node of group.nodes) {
+      groupByNodeId.set(String(node.id), group);
+    }
+  }
+
+  const cardIdByGroupKey = new Map<string, string>();
+  for (const group of sortedGroups) {
+    cardIdByGroupKey.set(group.key, group.cardId);
+  }
+
+  const linkBuckets = new Map<
+    string,
+    {
+      sourceGroup: DetailGroup;
+      targetGroup: DetailGroup;
+      count: number;
+      typeBreakdown: Record<string, number>;
+      evidenceRefs: Array<Record<string, unknown>>;
+    }
+  >();
+  for (const edge of visibleEdges) {
+    const sourceNodeId = String(edge.source);
+    const targetNodeId = String(edge.target);
+    const sourceGroup = groupByNodeId.get(sourceNodeId);
+    const targetGroup = groupByNodeId.get(targetNodeId);
+    if (sourceGroup == null || targetGroup == null) continue;
+    if (sourceGroup.key === targetGroup.key) continue;
+    const edgeType = String(edge.edge_type ?? 'contains');
+    const count = Math.max(1, Number((edge.metadata as Record<string, unknown> | undefined)?.count ?? 1));
+    const bucketKey = `${sourceGroup.key}->${targetGroup.key}`;
+    if (!linkBuckets.has(bucketKey)) {
+      linkBuckets.set(bucketKey, {
+        sourceGroup,
+        targetGroup,
+        count: 0,
+        typeBreakdown: {},
+        evidenceRefs: [],
+      });
+    }
+    const bucket = linkBuckets.get(bucketKey) as {
+      sourceGroup: DetailGroup;
+      targetGroup: DetailGroup;
+      count: number;
+      typeBreakdown: Record<string, number>;
+      evidenceRefs: Array<Record<string, unknown>>;
+    };
+    bucket.count += count;
+    bucket.typeBreakdown[edgeType] = Number(bucket.typeBreakdown[edgeType] ?? 0) + count;
+    if (bucket.evidenceRefs.length < 8) {
+      const sourceNode = nodeById.get(sourceNodeId);
+      const targetNode = nodeById.get(targetNodeId);
+      const sourceLookup = nodeLookup.get(sourceNodeId);
+      const targetLookup = nodeLookup.get(targetNodeId);
+      const relation = relationForNode(targetNodeId);
+      bucket.evidenceRefs.push({
+        source_node: sourceNodeId,
+        target_node: targetNodeId,
+        edge_type: edgeType,
+        source_label: sourceNode ? displayCardTitle(sourceNode, sourceLookup) : String(sourceLookup?.label ?? sourceNodeId),
+        target_label: targetNode ? displayCardTitle(targetNode, targetLookup) : String(targetLookup?.label ?? targetNodeId),
+        source_path: String(sourceNode?.path ?? sourceLookup?.path ?? ''),
+        target_path: String(targetNode?.path ?? targetLookup?.path ?? ''),
+        source_line: Number((edge.metadata as Record<string, unknown> | undefined)?.source_line ?? -1),
+        target_line: Number((edge.metadata as Record<string, unknown> | undefined)?.target_line ?? -1),
+        reason: `${edgeType} · ${relation.label}`,
+      });
+    }
+  }
+
+  const links = [...linkBuckets.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 320)
+    .map((bucket, index) => {
+      const dominantType = dominantEdgeType(bucket.typeBreakdown);
       return {
-        id: String(edge.id || `${edge.source}->${edge.target}:${edgeType}`),
+        id: `detail_link::${index}::${bucket.sourceGroup.key}->${bucket.targetGroup.key}`,
         sourceClusterId: laneId,
         targetClusterId: laneId,
-        sourceCardId: String(edge.source),
-        targetCardId: String(edge.target),
-        count: Math.max(1, count),
-        typeBreakdown: { [edgeType]: Math.max(1, count) },
-        evidenceRefs: [
-          {
-            source_node: String(edge.source),
-            target_node: String(edge.target),
-            edge_type: edgeType,
-            source_label: sourceNode ? displayCardTitle(sourceNode, sourceLookup) : String(sourceLookup?.label ?? edge.source),
-            target_label: targetNode ? displayCardTitle(targetNode, targetLookup) : String(targetLookup?.label ?? edge.target),
-            source_path: String(sourceNode?.path ?? sourceLookup?.path ?? ''),
-            target_path: String(targetNode?.path ?? targetLookup?.path ?? ''),
-            source_line: Number((edge.metadata as Record<string, unknown> | undefined)?.source_line ?? -1),
-            target_line: Number((edge.metadata as Record<string, unknown> | undefined)?.target_line ?? -1),
-          },
-        ],
-        color: legendColorForType(edgeType, legend),
-        style: legendStyleForType(edgeType, legend),
+        sourceCardId: String(cardIdByGroupKey.get(bucket.sourceGroup.key) ?? bucket.sourceGroup.cardId),
+        targetCardId: String(cardIdByGroupKey.get(bucket.targetGroup.key) ?? bucket.targetGroup.cardId),
+        count: bucket.count,
+        typeBreakdown: bucket.typeBreakdown,
+        evidenceRefs: bucket.evidenceRefs,
+        color: legendColorForType(dominantType, legend),
+        style: legendStyleForType(dominantType, legend),
         defaultVisible: true,
       };
     });
@@ -456,11 +663,11 @@ function boardFrameFromDetailVisible(args: {
         hiddenCards: 0,
         summary: {
           nodeCount: cards.length,
-          externalCount: links.length,
+          externalCount: links.reduce((acc, item) => acc + Number(item.count), 0),
           hot: 0,
           fileCount: cards.filter((card) => card.kind === 'file').length,
-          functionCount: cards.filter((card) => card.kind === 'function').length,
-          classCount: cards.filter((card) => card.kind === 'class').length,
+          functionCount: cards.reduce((acc, card) => acc + Number(card.stats.functions ?? 0), 0),
+          classCount: cards.reduce((acc, card) => acc + Number(card.stats.classes ?? 0), 0),
         },
       },
     ],
@@ -515,8 +722,8 @@ function boardFrameFromModelV2(
         .map((card, index) => {
           const previewCol = index % 2;
           const previewRow = Math.floor(index / 2);
-          const cardW = 192;
-          const cardH = 68;
+          const cardW = 196;
+          const cardH = 74;
           return {
             id: String(card.id),
             title: String(card.title),
@@ -601,8 +808,8 @@ function boardFrameFromModelV2(
   const panelX = 40;
   const panelY = 40;
   const panelW = 1280;
-  const cardW = 248;
-  const cardH = 96;
+  const cardW = 256;
+  const cardH = 106;
   const gapX = 16;
   const gapY = 16;
   const padX = 16;
@@ -729,7 +936,7 @@ function boardFrameFromModel(boardModel: BoardModel, mode: VisualizerMode, selec
           const previewCol = cardIndex % 2;
           const previewRow = Math.floor(cardIndex / 2);
           const cardW = 184;
-          const cardH = 44;
+          const cardH = 52;
           return {
             id: card.id,
             title: card.title,
@@ -794,8 +1001,8 @@ function boardFrameFromModel(boardModel: BoardModel, mode: VisualizerMode, selec
   const panelX = 40;
   const panelY = 40;
   const panelW = 1280;
-  const cardW = 248;
-  const cardH = 88;
+  const cardW = 256;
+  const cardH = 102;
   const gapX = 16;
   const gapY = 14;
   const padX = 16;
@@ -930,6 +1137,11 @@ export function App() {
   const nodeLookup = useNodeLookup(bundle);
   const boardModel = useMemo(() => getBoardModel(payload), [payload]);
   const boardModelV2 = useMemo(() => getBoardModelV2(payload), [payload]);
+  const relationshipEvidence = useMemo(() => {
+    const fromView = Array.isArray(payload.view_model?.relationship_evidence) ? payload.view_model?.relationship_evidence : [];
+    if (fromView.length > 0) return fromView;
+    return Array.isArray(payload.graph_bundle?.relationship_evidence) ? payload.graph_bundle?.relationship_evidence : [];
+  }, [payload.view_model?.relationship_evidence, payload.graph_bundle?.relationship_evidence]);
   const uiDefaults = useMemo(() => {
     return {
       detailRequiresAnchor: Boolean(
@@ -1212,6 +1424,20 @@ export function App() {
           ?? targetCardId,
       )
       : laneTitleById.get(String(link.targetClusterId)) ?? String(link.targetClusterId);
+    const fallbackEvidence = relationshipEvidence
+      .filter((row) => {
+        const sourceId = String((row as Record<string, unknown>).source_id ?? '');
+        const targetId = String((row as Record<string, unknown>).target_id ?? '');
+        return sourceId === String(link.sourceClusterId) && targetId === String(link.targetClusterId);
+      })
+      .flatMap((row) => {
+        const refs = (row as Record<string, unknown>).evidence_refs;
+        return Array.isArray(refs) ? refs : [];
+      });
+    const resolvedEvidenceRefs =
+      Array.isArray(link.evidenceRefs) && link.evidenceRefs.length > 0
+        ? [...link.evidenceRefs]
+        : fallbackEvidence;
     return {
       id: String(link.id),
       source: String(link.sourceClusterId),
@@ -1221,9 +1447,9 @@ export function App() {
       count: Number(link.count ?? 0),
       typeBreakdown,
       dominantType,
-      evidenceRefs: Array.isArray(link.evidenceRefs) ? [...link.evidenceRefs] : [],
+      evidenceRefs: resolvedEvidenceRefs,
     };
-  }, [boardFrame?.links, laneTitleById, selectedLinkId, viewModel?.nodesById, nodeLookup]);
+  }, [boardFrame?.links, laneTitleById, selectedLinkId, viewModel?.nodesById, nodeLookup, relationshipEvidence]);
 
   const selectedNodeScopeReason = useMemo(() => {
     if (selectedNodeId.trim() === '') return '';
@@ -1820,7 +2046,6 @@ export function App() {
             const next = event.target.value as VisualizerMode;
             if (next === 'detail' && uiDefaults.detailRequiresAnchor && selectedNodeId.trim() === '') {
               setToast('Detail 모드는 먼저 노드를 선택한 뒤 사용하세요. Structural에서 카드/Hub를 먼저 선택하세요.');
-              setMode('structural', 'manual_mode');
               return;
             }
             setMode(next, 'manual_mode');

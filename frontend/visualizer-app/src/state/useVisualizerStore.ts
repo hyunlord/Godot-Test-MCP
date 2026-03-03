@@ -111,7 +111,13 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
   hydrate: (payload) => {
     const bundle = payload.graph_bundle ?? null;
     const viewModel = payload.view_model ?? null;
-    const defaultMode = bundle?.ui_defaults?.default_layer ?? viewModel?.ui_defaults?.default_layer ?? 'cluster';
+    const rawDefaultMode = bundle?.ui_defaults?.default_layer ?? viewModel?.ui_defaults?.default_layer ?? 'cluster';
+    const requiresAnchor = Boolean(
+      bundle?.ui_defaults?.detail_requires_anchor
+        ?? viewModel?.ui_defaults?.detail_requires_anchor
+        ?? true,
+    );
+    const defaultMode = rawDefaultMode === 'detail' && requiresAnchor ? 'structural' : rawDefaultMode;
 
     const edgeEnabled: Record<string, boolean> = {};
     const defaultEnabled = new Set<string>(['contains', 'extends']);
@@ -165,7 +171,6 @@ export const useVisualizerStore = create<StoreState>((set, get) => ({
       );
       if (requiresAnchor && state.selectedNodeId.trim() === '') {
         set({
-          mode: 'structural',
           toast: 'Detail 모드는 먼저 노드를 선택해야 합니다.',
           lastNavigationReason: reason,
         });
