@@ -326,11 +326,16 @@ func _cmd_wait_frames(params: Dictionary) -> Dictionary:
 	var frames: int = int(params.get("frames", 1))
 	if frames < 1:
 		frames = 1
+	# NOTE: OS.delay_msec() blocks the Godot main thread.
+	# The game loop does NOT advance during this wait.
+	# This is a time-based approximation, not true frame advancement.
+	# For accurate frame stepping, use the Godot editor's built-in pause/step.
+	var physics_fps: float = float(ProjectSettings.get_setting("physics/common/physics_ticks_per_second", 60))
 	var fallback_fps: float = 60.0
-	var fps: float = fallback_fps if Engine.max_fps <= 0 else float(Engine.max_fps)
-	var wait_ms: int = int(ceil((1000.0 / fps) * frames))
+	var effective_fps: float = physics_fps if physics_fps > 0.0 else fallback_fps
+	var wait_ms: int = int(ceil((1000.0 / effective_fps) * frames))
 	OS.delay_msec(wait_ms)
-	return {"result": {"waited_frames": frames, "waited_ms": wait_ms}}
+	return {"result": {"waited_frames": frames, "waited_ms": wait_ms, "fps_used": effective_fps}}
 
 
 func _cmd_eval(params: Dictionary) -> Dictionary:
@@ -551,6 +556,8 @@ func _collect_capabilities(
 	hook_targets: Array,
 	mutable_properties: Array
 ) -> void:
+	if nodes.size() >= 500:
+		return
 	nodes.append({"name": node.name, "path": str(node.get_path()), "class": node.get_class()})
 
 	for g in node.get_groups():
@@ -586,6 +593,8 @@ func _collect_capabilities(
 			break
 
 	for child in node.get_children():
+		if nodes.size() >= 500:
+			break
 		if child is Node:
 			_collect_capabilities(
 				child,
@@ -595,8 +604,6 @@ func _collect_capabilities(
 				hook_targets,
 				mutable_properties
 			)
-		if nodes.size() >= 500:
-			break
 
 
 func _collect_visual_nodes(node: Node, out: Array, max_nodes: int) -> void:

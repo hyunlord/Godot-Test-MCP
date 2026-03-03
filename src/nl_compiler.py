@@ -82,6 +82,7 @@ class NLTestCompiler:
 
         for segment in segments:
             matched_in_segment: bool = False
+            mutation_matched: bool = False
 
             wait_match = _WAIT_RE.search(segment)
             if wait_match is not None:
@@ -114,6 +115,7 @@ class NLTestCompiler:
                     )
                 )
                 matched_in_segment = True
+                mutation_matched = True
 
             call_match = _CALL_RE.search(segment)
             if call_match is not None:
@@ -130,6 +132,7 @@ class NLTestCompiler:
                     )
                 )
                 matched_in_segment = True
+                mutation_matched = True
 
             input_match = _INPUT_ACTION_RE.search(segment)
             if input_match is not None:
@@ -145,7 +148,11 @@ class NLTestCompiler:
                 requires_input = True
                 matched_in_segment = True
 
-            state_assert_match = _STATE_ASSERT_RE.search(segment)
+            # Only check assert_state if no mutation was matched in this segment
+            if not mutation_matched:
+                state_assert_match = _STATE_ASSERT_RE.search(segment)
+            else:
+                state_assert_match = None
             if state_assert_match is not None:
                 raw_op: str = state_assert_match.group(3).strip().lower()
                 op: str = _normalize_operator(raw_op)

@@ -160,8 +160,7 @@ class NLTestExecutor:
             "errors": errors,
         }
 
-        report_path: str = store.write_report(report)
-        report["artifacts"]["logs"].append(report_path)
+        report["artifacts"]["logs"].append(str(store.report_path.resolve()))
         store.write_report(report)
         return report
 
@@ -418,23 +417,30 @@ def _new_run_id() -> str:
 
 async def _render_video(frames_dir: Path, output_path: Path) -> bool:
     """Render frame PNG files into an MP4 video using ffmpeg."""
-    pattern: str = str((frames_dir / "*.png").resolve())
+    frame_files = sorted(frames_dir.glob("*.png"))
+    if not frame_files:
+        return False
+
+    # Write a concat list file for cross-platform compatibility
+    concat_path = frames_dir / "concat.txt"
+    with concat_path.open("w", encoding="utf-8") as f:
+        for frame in frame_files:
+            f.write(f"file '{frame.resolve()}'\n")
+            f.write("duration 0.0333\n")  # ~30fps
+
     process = await asyncio.create_subprocess_exec(
         "ffmpeg",
         "-y",
-        "-framerate",
-        "30",
-        "-pattern_type",
-        "glob",
-        "-i",
-        pattern,
-        "-pix_fmt",
-        "yuv420p",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_path),
+        "-pix_fmt", "yuv420p",
         str(output_path),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
     )
     exit_code: int = await process.wait()
+    concat_path.unlink(missing_ok=True)
     return exit_code == 0 and output_path.is_file()
 
 
